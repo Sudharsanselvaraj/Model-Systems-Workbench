@@ -1,9 +1,5 @@
 <div align="center">
 
-<img src="assets/readme/hero.png" alt="MSU LLM Inference Workbench — terminal dashboard" width="100%" />
-
-<br />
-
 # MSU LLM Inference Workbench
 
 ### Audit the knowledge base. Evaluate the models. Cap the spend. Understand the serving stack.
@@ -18,6 +14,7 @@
 [![Spend](https://img.shields.io/badge/spend-$0.00-1C1C1C?style=for-the-badge)](#budget-ledger)
 [![Tests](https://img.shields.io/badge/tests-pytest-1C1C1C?style=for-the-badge&logo=pytest&logoColor=D0D0D0)](#development)
 
+[**Preview**](#preview) ·
 [**Quick Start**](#quick-start) ·
 [**Features**](#features) ·
 [**Architecture**](#architecture) ·
@@ -116,6 +113,14 @@ Findings are classified, not just fixed:
 | `DUPLICATE_ENTRY` | Same question repeated across programmes | **Investigated** before merging |
 
 > The system will never silently pick a number. If two facts disagree, a human decides.
+
+---
+
+## Preview
+
+<div align="center">
+<img src="assets/readme/hero.png" alt="MSU LLM Inference Workbench terminal dashboard" width="100%" />
+</div>
 
 ---
 
