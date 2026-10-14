@@ -92,6 +92,14 @@ class EvaluationCase(BaseModel):
     )
     split: DatasetSplit = Field(default=DatasetSplit.UNASSIGNED)
     verification: VerificationRecord = Field(default_factory=VerificationRecord)
+    expected_context: Optional[str] = Field(
+        default=None,
+        description="Authoritative grounding context/chunks that the retriever is expected to fetch."
+    )
+    expected_retrieval_keywords: List[str] = Field(
+        default_factory=list,
+        description="Key terms or section headings expected to be returned by retriever."
+    )
     tags: List[str] = Field(default_factory=list)
     metadata: Dict[str, Any] = Field(default_factory=dict)
 
