@@ -9,7 +9,7 @@
 <br />
 
 [![Python](https://img.shields.io/badge/python-3.11+-1C1C1C?style=for-the-badge&logo=python&logoColor=D0D0D0)](https://www.python.org/)
-[![Phase](https://img.shields.io/badge/phase-1_complete-1C1C1C?style=for-the-badge)](#roadmap)
+[![Phase](https://img.shields.io/badge/phase-2_complete-1C1C1C?style=for-the-badge)](#roadmap)
 [![Network](https://img.shields.io/badge/network-offline-1C1C1C?style=for-the-badge)](#safety-model)
 [![Spend](https://img.shields.io/badge/spend-$0.00-1C1C1C?style=for-the-badge)](#budget-ledger)
 [![Tests](https://img.shields.io/badge/tests-pytest-1C1C1C?style=for-the-badge&logo=pytest&logoColor=D0D0D0)](#development)
@@ -37,8 +37,8 @@ This workbench attacks both problems, in order:
 | Step | Question it answers | Status |
 |:--:|---|:--:|
 | **1** | Is the knowledge base actually correct? | Shipped |
-| **2** | Can we build a leak-free evaluation dataset from it? | Next |
-| **3** | Which model gives the best accuracy, groundedness, latency and cost? | Planned |
+| **2** | Can we build a leak-free evaluation dataset from it? | Shipped |
+| **3** | Which model gives the best accuracy, groundedness, latency and cost? | Next |
 | **4** | Why do production answers fail — routing, retrieval, generation or KB? | Planned |
 | **5** | Can we serve a small open-weight model ourselves with vLLM? | Planned |
 
@@ -164,6 +164,12 @@ uv run msu-llm-lab remediate-kb "path/to/kb.md" \
   --apply --output data/remediated/MSU_Programmes_KB_v1.1_clean.md
 ```
 
+### Validate an evaluation dataset (leakage & confidentiality)
+
+```bash
+uv run msu-llm-lab validate-dataset data/evaluation/synthetic_seed_eval.jsonl
+```
+
 ### Keybindings
 
 | Key | Action |
@@ -262,7 +268,7 @@ All entries are `UNVERIFIED_CATALOG_ENTRY`: planning baselines with preliminary 
 
 - [x] **Phase 0:** discovery and architecture
 - [x] **Phase 1:** KB audit, remediation, budget ledger, model catalog, TUI
-- [ ] **Phase 2:** evaluation schemas, confidentiality gate, train/dev/test split, n-gram leakage detector
+- [x] **Phase 2:** evaluation schemas, confidentiality gate, train/dev/test split, n-gram leakage detector
 - [ ] **Phase 3:** OpenRouter provider with retry/backoff, secret scrubbing, dry-run mode, model comparison
 - [ ] **Phase 4:** redacted Langfuse trace ingestion and failure classification (routing / retrieval / generation / KB)
 - [ ] **Phase 5:** LoRA / QLoRA fine-tuning feasibility and GPU sizing
