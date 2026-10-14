@@ -48,7 +48,8 @@ htmlcov/
 secrets.json
 
 # Local research data, trace exports, and reports (DO NOT COMMIT)
-data/
+data/*
+!data/evaluation/
 reports/
 *.sqlite
 *.sqlite3
