@@ -26,8 +26,8 @@ class ModelCandidate(BaseModel):
 
 DEFAULT_PORTFOLIO: List[ModelCandidate] = [
     ModelCandidate(
-        model_id="google/gemini-flash-1.5",
-        display_name="Gemini Flash 1.5",
+        model_id="google/gemini-3.5-flash-lite",
+        display_name="Gemini 3.5 Flash Lite",
         provider="google",
         deployment_mode="HOSTED_DIRECT",
         license="Proprietary Commercial API",
@@ -35,7 +35,7 @@ DEFAULT_PORTFOLIO: List[ModelCandidate] = [
         input_price_per_1m_usd=Decimal("0.0750"),
         output_price_per_1m_usd=Decimal("0.3000"),
         verification_status="UNVERIFIED_CATALOG_ENTRY",
-        experimental_purpose="Existing-system production reference baseline.",
+        experimental_purpose="High-throughput multimodal baseline for student counsellor triage.",
     ),
     ModelCandidate(
         model_id="anthropic/claude-haiku-5.5",
@@ -115,6 +115,13 @@ def get_portfolio(db: Optional[DatabaseManager] = None) -> List[ModelCandidate]:
     if not rows:
         seed_default_portfolio(db_mgr)
         rows = db_mgr.get_all_models()
+    else:
+        existing_ids = [r["model_id"] for r in rows]
+        if "google/gemini-flash-1.5" in existing_ids and "google/gemini-3.5-flash-lite" not in existing_ids:
+            with db_mgr.get_connection() as conn:
+                conn.execute("DELETE FROM model_portfolio WHERE model_id = 'google/gemini-flash-1.5'")
+            seed_default_portfolio(db_mgr)
+            rows = db_mgr.get_all_models()
 
     candidates = []
     for r in rows:
