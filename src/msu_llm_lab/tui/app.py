@@ -1,281 +1,523 @@
-"""State machine and interactive loop for the MSU LLM Workbench TUI."""
+"""Persistent, panel-based interactive terminal user interface for MSU LLM Workbench."""
 
 import sys
 from enum import Enum, auto
-from typing import Optional, List
+from typing import List, Optional
 from rich.console import Console
+from rich.layout import Layout
+from rich.panel import Panel
 
-from msu_llm_lab.core.budget import BudgetService
+from msu_llm_lab.core.budget import BudgetService, BudgetStatus
 from msu_llm_lab.models.catalog import get_portfolio, ModelCandidate
-from msu_llm_lab.tui.health import run_system_health_checks
+from msu_llm_lab.tui.health import run_system_health_checks, HealthCheckItem
 from msu_llm_lab.tui.input import KeyReader
+from msu_llm_lab.tui.telemetry import SystemTelemetry, InferenceTelemetry, LogBuffer
 from msu_llm_lab.tui.screens import (
-    render_welcome_screen,
-    render_model_list_screen,
-    render_model_detail_screen,
-    render_budget_screen,
-    render_health_screen,
-    render_unimplemented_screen,
-    MENU_ITEMS,
+    NAV_ITEMS,
+    build_top_header,
+    build_navigation_panel,
+    build_system_and_metrics_panel,
+    build_inference_status_panel,
+    build_model_catalogue_panel,
+    build_budget_main_panel,
+    build_roadmap_panel,
+    build_health_main_panel,
+    build_settings_main_panel,
+    build_help_main_panel,
+    build_recent_logs_panel,
+    build_budget_usage_bottom_panel,
+    build_datasets_bottom_panel,
+    build_command_bar,
+    build_footer_bar,
 )
 
 
-class ScreenState(Enum):
-    WELCOME = auto()
-    MODELS = auto()
-    MODEL_DETAIL = auto()
-    BUDGET = auto()
-    HEALTH = auto()
-    UNIMPLEMENTED = auto()
-    PROMPT = auto()
-    EXIT = auto()
+class InputMode(Enum):
+    NORMAL = auto()
+    COMMAND = auto()
+    SEARCH = auto()
+    HELP = auto()
 
 
 class WorkbenchTUI:
-    """Main interactive terminal application for MSU LLM Workbench."""
+    """Single-instance, persistent panel-based TUI for msu-llm-lab inspired by btop."""
 
-    def __init__(self, console: Optional[Console] = None, key_reader: Optional[KeyReader] = None) -> None:
+    def __init__(
+        self,
+        console: Optional[Console] = None,
+        key_reader: Optional[KeyReader] = None,
+    ) -> None:
         self.console = console or Console()
         self.key_reader = key_reader or KeyReader()
         self.budget_service = BudgetService()
-        self.state = ScreenState.WELCOME
-        self.menu_cursor = 0
-        self.model_cursor = 0
+
+        # Telemetry & Logging
+        self.sys_telemetry = SystemTelemetry()
+        self.inf_telemetry = InferenceTelemetry()
+        self.log_buffer = LogBuffer()
+
+        # State
+        self.nav_index: int = 0
+        self.focused_pane: str = "NAV"  # "NAV" or "MAIN"
+        self.model_cursor: int = 0
+        self.input_mode: InputMode = InputMode.NORMAL
+
+        # Editable Command / Search Bar State
+        self.text_buffer: str = ""
+        self.cursor_pos: int = 0
+        self.command_history: List[str] = []
+        self.history_index: int = -1
+        self.search_query: str = ""
+        self.feedback_message: str = ""
+
+        # Data cache
         self.candidates: List[ModelCandidate] = []
-        self.unimplemented_feature = ("", "")
+        self.budget_status: Optional[BudgetStatus] = None
+        self.health_items: List[HealthCheckItem] = []
+        self.should_exit: bool = False
 
-    def refresh_data(self) -> None:
-        """Loads latest data from SQLite and local services."""
-        self.candidates = get_portfolio()
-
-    def run(self) -> None:
-        """Runs the interactive UI event loop until EXIT is reached."""
+        # Initial data load
         self.refresh_data()
 
-        # If running in non-interactive mode (e.g. redirected or test pipe), render welcome and exit cleanly
-        if not self.key_reader.is_tty:
-            render_welcome_screen(self.console, self.menu_cursor)
+    def refresh_data(self) -> None:
+        """Loads latest data from SQLite ledger, portfolio registry, diagnostics, and telemetry."""
+        self.candidates = get_portfolio()
+        self.budget_status = self.budget_service.get_status()
+        self.health_items = run_system_health_checks()
+        self.sys_telemetry.sample()
+
+    def build_layout(self) -> Layout:
+        """Constructs the single, persistent layout shell adapted to terminal size."""
+        width, height = self.console.size
+
+        # Graceful handling for very small terminal dimensions
+        if width < 75 or height < 18:
+            layout = Layout()
+            warning = Panel(
+                f"[bold yellow]Terminal size ({width}x{height}) is too compact.[/bold yellow]\n\n"
+                "[dim]Please expand your terminal window to at least 80 columns x 24 rows for the full btop dashboard layout.[/dim]",
+                title="[bold red]Display Notice[/bold red]",
+                border_style="yellow",
+            )
+            layout.update(warning)
+            return layout
+
+        # Adjust component sizing dynamically based on height
+        top_size = 12 if height >= 34 else 10
+        bottom_size = 7 if height >= 34 else 6
+
+        layout = Layout()
+        layout.split(
+            Layout(name="header", size=1),
+            Layout(name="top_row", size=top_size),
+            Layout(name="main", ratio=1),
+            Layout(name="bottom_row", size=bottom_size),
+            Layout(name="footer", size=4),
+        )
+
+        layout["top_row"].split_row(
+            Layout(name="nav", size=28),
+            Layout(name="sys_metrics", ratio=1),
+            Layout(name="inf_status", size=26),
+        )
+
+
+        layout["bottom_row"].split_row(
+            Layout(name="logs", ratio=1),
+            Layout(name="budget_usage", ratio=1),
+            Layout(name="datasets", ratio=1),
+        )
+
+        layout["footer"].split(
+            Layout(name="command", size=3),
+            Layout(name="status_line", size=1),
+        )
+
+        # 1. Header Bar (Single top line)
+        layout["header"].update(build_top_header())
+
+        # 2. Navigation Sidebar
+        layout["top_row"]["nav"].update(
+            build_navigation_panel(self.nav_index, self.focused_pane == "NAV")
+        )
+
+        # 3. System Resources and Request Metrics
+        layout["top_row"]["sys_metrics"].update(
+            build_system_and_metrics_panel(self.sys_telemetry, self.inf_telemetry)
+        )
+
+        # 4. Inference Status
+        if self.budget_status:
+            layout["top_row"]["inf_status"].update(
+                build_inference_status_panel(self.budget_status)
+            )
+
+        # 5. Main Content Panel (Dynamic central area)
+        if self.input_mode == InputMode.HELP or self.nav_index == 7:
+            content_panel = build_help_main_panel()
+        elif self.nav_index == 0:
+            content_panel = build_model_catalogue_panel(
+                self.candidates,
+                self.model_cursor,
+                self.search_query,
+                self.focused_pane == "MAIN",
+            )
+        elif self.nav_index == 1:
+            if self.budget_status:
+                content_panel = build_budget_main_panel(
+                    self.budget_status,
+                    self.focused_pane == "MAIN",
+                )
+            else:
+                content_panel = Panel(
+                    "Budget data unavailable",
+                    title="BUDGET & USAGE",
+                )
+        elif self.nav_index == 2:
+            content_panel = build_roadmap_panel(
+                "DATASET VALIDATION",
+                "PLANNED (Step 2)",
+                [
+                    "MSU General KB & Programmes KB schema validation",
+                    "Dify prompt template extraction & variable checks",
+                    "Ground truth query-response pairing & golden datasets",
+                    "Student privacy redaction & sanitization filters",
+                ],
+                self.focused_pane == "MAIN",
+            )
+        elif self.nav_index == 3:
+            content_panel = build_roadmap_panel(
+                "EVALUATION RUNS",
+                "PLANNED (Step 3)",
+                [
+                    "Dry-run baseline evaluation matrix",
+                    "Batch model inference execution with budget controls",
+                    "Deterministic latency & token usage recording",
+                    "Automated scoring against ground-truth benchmarks",
+                ],
+                self.focused_pane == "MAIN",
+            )
+        elif self.nav_index == 4:
+            content_panel = build_roadmap_panel(
+                "TRACES & OBSERVABILITY",
+                "PLANNED (Step 4)",
+                [
+                    "Langfuse trace schema compatibility & ingestion",
+                    "Step-by-step latency breakdown (retrieval vs inference)",
+                    "Per-session token efficiency analysis",
+                    "Zero external network egress audit mode",
+                ],
+                self.focused_pane == "MAIN",
+            )
+        elif self.nav_index == 5:
+            content_panel = build_health_main_panel(
+                self.health_items,
+                self.focused_pane == "MAIN",
+            )
+        elif self.nav_index == 6:
+            content_panel = build_settings_main_panel(self.focused_pane == "MAIN")
+        else:
+            content_panel = build_model_catalogue_panel(
+                self.candidates,
+                self.model_cursor,
+                self.search_query,
+                self.focused_pane == "MAIN",
+            )
+
+        layout["main"].update(content_panel)
+
+        # 6. Bottom Panels (Logs, Budget Progress, Datasets)
+        layout["bottom_row"]["logs"].update(build_recent_logs_panel(self.log_buffer))
+        if self.budget_status:
+            layout["bottom_row"]["budget_usage"].update(
+                build_budget_usage_bottom_panel(self.budget_status)
+            )
+        layout["bottom_row"]["datasets"].update(build_datasets_bottom_panel())
+
+        # 7. Command Input Bar & Status Line
+        layout["footer"]["command"].update(
+            build_command_bar(
+                self.input_mode.name,
+                self.text_buffer,
+                self.cursor_pos,
+                self.feedback_message,
+            )
+        )
+        if self.budget_status:
+            layout["footer"]["status_line"].update(build_footer_bar(self.budget_status))
+
+        return layout
+
+    def run(self) -> None:
+        """Main event loop using Live alternate screen buffer to prevent duplicate rendering."""
+        self.refresh_data()
+
+        is_interactive = self.key_reader.is_tty and self.console.is_terminal
+
+        # Non-interactive / piped / automated test execution
+        if not is_interactive:
+            self.console.print(self.build_layout())
             return
 
-        try:
-            while self.state != ScreenState.EXIT:
-                if self.state == ScreenState.WELCOME:
-                    self._handle_welcome()
-                elif self.state == ScreenState.MODELS:
-                    self._handle_models()
-                elif self.state == ScreenState.MODEL_DETAIL:
-                    self._handle_model_detail()
-                elif self.state == ScreenState.BUDGET:
-                    self._handle_budget()
-                elif self.state == ScreenState.HEALTH:
-                    self._handle_health()
-                elif self.state == ScreenState.UNIMPLEMENTED:
-                    self._handle_unimplemented()
-                elif self.state == ScreenState.PROMPT:
-                    self._handle_prompt()
+        from rich.live import Live
 
+        try:
+            with Live(
+                self.build_layout(),
+                console=self.console,
+                screen=True,
+                auto_refresh=False,
+            ) as live:
+                while not self.should_exit:
+                    live.update(self.build_layout(), refresh=True)
+                    key = self.key_reader.read_key()
+                    self.handle_key(key)
         except KeyboardInterrupt:
-            self.console.print("\n[yellow]Interrupted by user. Exiting workbench.[/yellow]")
+            pass
         finally:
             self.console.print("[dim]Exited MSU LLM Inference Workbench.[/dim]")
 
-    def _handle_welcome(self) -> None:
-        render_welcome_screen(self.console, self.menu_cursor)
-        key = self.key_reader.read_key()
+    def handle_key(self, key: str) -> None:
+        """Processes keystrokes according to active input mode."""
+        if not key or key == "TIMEOUT":
+            return
 
-        if key == "UP":
-            self.menu_cursor = (self.menu_cursor - 1) % len(MENU_ITEMS)
-        elif key == "DOWN":
-            self.menu_cursor = (self.menu_cursor + 1) % len(MENU_ITEMS)
+        # 1. HELP Mode Key Handling
+        if self.input_mode == InputMode.HELP:
+            if key in ("?", "ESC", "ENTER", "q", "Q"):
+                self.input_mode = InputMode.NORMAL
+            return
+
+        # 2. COMMAND Mode (:prompt) Key Handling
+        if self.input_mode == InputMode.COMMAND:
+            if key == "ESC":
+                self.input_mode = InputMode.NORMAL
+                self.text_buffer = ""
+                self.cursor_pos = 0
+                self.feedback_message = "Command cancelled"
+            elif key == "ENTER":
+                cmd = self.text_buffer.strip()
+                if cmd:
+                    self.command_history.append(cmd)
+                    self.history_index = len(self.command_history)
+                    self.execute_command(cmd)
+                self.input_mode = InputMode.NORMAL
+                self.text_buffer = ""
+                self.cursor_pos = 0
+            elif key == "BACKSPACE":
+                if self.cursor_pos > 0:
+                    self.text_buffer = (
+                        self.text_buffer[: self.cursor_pos - 1]
+                        + self.text_buffer[self.cursor_pos :]
+                    )
+                    self.cursor_pos -= 1
+                elif not self.text_buffer:
+                    self.input_mode = InputMode.NORMAL
+            elif key == "LEFT":
+                self.cursor_pos = max(0, self.cursor_pos - 1)
+            elif key == "RIGHT":
+                self.cursor_pos = min(len(self.text_buffer), self.cursor_pos + 1)
+            elif key == "HOME":
+                self.cursor_pos = 0
+            elif key == "END":
+                self.cursor_pos = len(self.text_buffer)
+            elif key == "UP":
+                if self.command_history and self.history_index > 0:
+                    self.history_index -= 1
+                    self.text_buffer = self.command_history[self.history_index]
+                    self.cursor_pos = len(self.text_buffer)
+            elif key == "DOWN":
+                if self.command_history and self.history_index < len(self.command_history) - 1:
+                    self.history_index += 1
+                    self.text_buffer = self.command_history[self.history_index]
+                    self.cursor_pos = len(self.text_buffer)
+                elif self.history_index >= len(self.command_history) - 1:
+                    self.history_index = len(self.command_history)
+                    self.text_buffer = ""
+                    self.cursor_pos = 0
+            elif len(key) == 1 and key.isprintable():
+                self.text_buffer = (
+                    self.text_buffer[: self.cursor_pos]
+                    + key
+                    + self.text_buffer[self.cursor_pos :]
+                )
+                self.cursor_pos += 1
+            return
+
+        # 3. SEARCH / FILTER Mode (/prompt) Key Handling
+        if self.input_mode == InputMode.SEARCH:
+            if key == "ESC":
+                self.input_mode = InputMode.NORMAL
+                self.text_buffer = ""
+                self.search_query = ""
+                self.cursor_pos = 0
+                self.feedback_message = "Filter cleared"
+            elif key == "ENTER":
+                self.search_query = self.text_buffer.strip()
+                self.input_mode = InputMode.NORMAL
+                self.feedback_message = (
+                    f"Filter applied: '{self.search_query}'"
+                    if self.search_query
+                    else "Filter cleared"
+                )
+            elif key == "BACKSPACE":
+                if self.cursor_pos > 0:
+                    self.text_buffer = (
+                        self.text_buffer[: self.cursor_pos - 1]
+                        + self.text_buffer[self.cursor_pos :]
+                    )
+                    self.cursor_pos -= 1
+                    self.search_query = self.text_buffer
+                elif not self.text_buffer:
+                    self.search_query = ""
+                    self.input_mode = InputMode.NORMAL
+            elif key == "LEFT":
+                self.cursor_pos = max(0, self.cursor_pos - 1)
+            elif key == "RIGHT":
+                self.cursor_pos = min(len(self.text_buffer), self.cursor_pos + 1)
+            elif len(key) == 1 and key.isprintable():
+                self.text_buffer = (
+                    self.text_buffer[: self.cursor_pos]
+                    + key
+                    + self.text_buffer[self.cursor_pos :]
+                )
+                self.cursor_pos += 1
+                self.search_query = self.text_buffer
+            return
+
+        # 4. NORMAL Mode Navigation
+        if key in (":",):
+            self.input_mode = InputMode.COMMAND
+            self.text_buffer = ""
+            self.cursor_pos = 0
+            self.feedback_message = ""
+        elif key in ("/",):
+            self.input_mode = InputMode.SEARCH
+            self.text_buffer = ""
+            self.cursor_pos = 0
+            self.feedback_message = ""
+        elif key in ("?",):
+            self.input_mode = InputMode.HELP
         elif key in ("q", "Q", "EOF"):
-            self.state = ScreenState.EXIT
-        elif key in ("p", "P"):
-            self.state = ScreenState.PROMPT
-        elif key in ("1", "2", "3", "4", "5", "6", "7"):
-            self.menu_cursor = int(key) - 1
-            self._dispatch_menu_selection()
-        elif key == "ENTER":
-            self._dispatch_menu_selection()
-
-    def _dispatch_menu_selection(self) -> None:
-        if self.menu_cursor == 0:
-            self.model_cursor = 0
-            self.state = ScreenState.MODELS
-        elif self.menu_cursor == 1:
-            self.state = ScreenState.BUDGET
-        elif self.menu_cursor == 2:
-            self.unimplemented_feature = ("Dataset Validation", "Step 2: Evaluation Case Schemas & Leakage Checks")
-            self.state = ScreenState.UNIMPLEMENTED
-        elif self.menu_cursor == 3:
-            self.unimplemented_feature = ("Evaluation Runs", "Step 4: Local Evaluation Runner & Dry-Run Scorer")
-            self.state = ScreenState.UNIMPLEMENTED
-        elif self.menu_cursor == 4:
-            self.unimplemented_feature = ("Traces & Observability", "Step 6: Local Span Tracer & Redacted Langfuse Adapter")
-            self.state = ScreenState.UNIMPLEMENTED
-        elif self.menu_cursor == 5:
-            self.state = ScreenState.HEALTH
-        elif self.menu_cursor == 6:
-            self.state = ScreenState.EXIT
-
-    def _handle_models(self) -> None:
-        if not self.candidates:
-            self.refresh_data()
-        render_model_list_screen(self.console, self.candidates, self.model_cursor)
-        key = self.key_reader.read_key()
-
-        if key == "UP":
-            if self.candidates:
-                self.model_cursor = (self.model_cursor - 1) % len(self.candidates)
-        elif key == "DOWN":
-            if self.candidates:
-                self.model_cursor = (self.model_cursor + 1) % len(self.candidates)
-        elif key in ("ESC", "b", "B", "q", "Q"):
-            self.state = ScreenState.WELCOME
-        elif key == "ENTER":
-            if self.candidates:
-                self.state = ScreenState.MODEL_DETAIL
-
-    def _handle_model_detail(self) -> None:
-        if 0 <= self.model_cursor < len(self.candidates):
-            candidate = self.candidates[self.model_cursor]
-            render_model_detail_screen(self.console, candidate)
-        self.key_reader.read_key()
-        self.state = ScreenState.MODELS
-
-    def _handle_budget(self) -> None:
-        status = self.budget_service.get_status()
-        render_budget_screen(self.console, status)
-        self.key_reader.read_key()
-        self.state = ScreenState.WELCOME
-
-    def _handle_health(self) -> None:
-        items = run_system_health_checks()
-        render_health_screen(self.console, items)
-        self.key_reader.read_key()
-        self.state = ScreenState.WELCOME
-
-    def _handle_unimplemented(self) -> None:
-        name, step = self.unimplemented_feature
-        render_unimplemented_screen(self.console, name, step)
-        self.key_reader.read_key()
-        self.state = ScreenState.WELCOME
-
-    def _handle_prompt(self) -> None:
-        """Screen E: Interactive command prompt dispatcher."""
-        self.console.clear()
-        self.console.print("[bold bright_white]MSU LLM Workbench — Command Centre[/bold bright_white]")
-        self.console.print("[dim]Type 'help' for supported commands, 'menu' for visual UI, or 'exit' to quit.[/dim]\n")
-
-        while True:
-            try:
-                cmd_line = self.console.input("[bold cyan]msu-workbench>[/bold cyan] ").strip()
-            except (EOFError, KeyboardInterrupt):
-                self.state = ScreenState.WELCOME
-                break
-
-            if not cmd_line:
-                continue
-
-            parts = cmd_line.split()
-            cmd = parts[0].lower()
-
-            if cmd in ("exit", "quit", "q"):
-                self.state = ScreenState.EXIT
-                break
-            elif cmd in ("menu", "ui"):
-                self.state = ScreenState.WELCOME
-                break
-            elif cmd in ("clear", "cls"):
-                self.console.clear()
-            elif cmd == "help":
-                self._print_prompt_help()
-            elif cmd == "models":
-                self._run_prompt_models()
-            elif cmd == "budget":
-                self._run_prompt_budget()
-            elif cmd == "health":
-                self._run_prompt_health()
-            elif cmd == "audit":
-                self._run_prompt_audit()
+            if self.search_query:
+                self.search_query = ""
+                self.feedback_message = "Filter cleared"
             else:
-                self.console.print(f"[red]Unknown command:[/red] '{cmd}'. Type '[bold]help[/bold]' for available commands.")
+                self.should_exit = True
+        elif key in ("ESC",):
+            if self.search_query:
+                self.search_query = ""
+                self.feedback_message = "Filter cleared"
+            elif self.focused_pane == "MAIN":
+                self.focused_pane = "NAV"
+        elif key in ("TAB", "SHIFT_TAB"):
+            self.focused_pane = "MAIN" if self.focused_pane == "NAV" else "NAV"
+        elif key in ("UP", "k", "K"):
+            if self.focused_pane == "NAV":
+                self.nav_index = (self.nav_index - 1) % len(NAV_ITEMS)
+            else:
+                self.model_cursor = max(0, self.model_cursor - 1)
+        elif key in ("DOWN", "j", "J"):
+            if self.focused_pane == "NAV":
+                self.nav_index = (self.nav_index + 1) % len(NAV_ITEMS)
+            else:
+                self.model_cursor = min(
+                    max(0, len(self.candidates) - 1), self.model_cursor + 1
+                )
+        elif key in ("1", "2", "3", "4", "5", "6", "7", "8"):
+            self.nav_index = int(key) - 1
+            self.focused_pane = "MAIN"
+            self.log_buffer.add("INFO", f"Navigated to {NAV_ITEMS[self.nav_index][1]}")
+        elif key in ("r", "R"):
+            self.refresh_data()
+            self.feedback_message = "Refreshed models, telemetry, and budget ledger"
+            self.log_buffer.add("INFO", "Telemetry and SQLite ledger refreshed")
+        elif key in ("ENTER",):
+            self.focused_pane = "MAIN"
 
-    def _print_prompt_help(self) -> None:
-        from rich.table import Table
-        t = Table(title="Available Workbench Commands", show_header=True, header_style="bold blue")
-        t.add_column("Command", style="cyan")
-        t.add_column("Description")
-        t.add_row("models", "List candidate models and their verification status")
-        t.add_row("budget", "Display budget ledger, ceilings, and remaining allowance")
-        t.add_row("health", "Run live system and knowledge base integrity checks")
-        t.add_row("audit", "Run knowledge base structure audit summary")
-        t.add_row("menu", "Return to full-screen visual interactive navigation")
-        t.add_row("clear", "Clear terminal screen")
-        t.add_row("exit / quit", "Exit the workbench and return to shell")
-        self.console.print(t)
+    def execute_command(self, cmd_line: str) -> None:
+        """Parses and executes a command entered via the command bar."""
+        raw_cmd = cmd_line.lstrip(":").strip()
+        if not raw_cmd:
+            return
 
-    def _run_prompt_models(self) -> None:
-        candidates = get_portfolio()
-        from rich.table import Table
-        t = Table(title="Candidate Models Portfolio", show_header=True, header_style="bold magenta")
-        t.add_column("Model ID", style="cyan")
-        t.add_column("Display Name")
-        t.add_column("Mode", style="blue")
-        t.add_column("Price (In/Out 1M)", justify="right")
-        t.add_column("Status", justify="center")
-        for m in candidates:
-            t.add_row(
-                m.model_id,
-                m.display_name,
-                m.deployment_mode,
-                f"${m.input_price_per_1m_usd:.2f} / ${m.output_price_per_1m_usd:.2f}",
-                f"[yellow]{m.verification_status}[/yellow]",
-            )
-        self.console.print(t)
+        parts = raw_cmd.split()
+        cmd = parts[0].lower()
 
-    def _run_prompt_budget(self) -> None:
-        status = self.budget_service.get_status()
-        from rich.table import Table
-        t = Table(title="Local Budget Status", show_header=True, header_style="bold magenta")
-        t.add_column("Metric", style="dim")
-        t.add_column("Ceiling", justify="right")
-        t.add_column("Spend", justify="right")
-        t.add_column("Remaining", justify="right", style="bold")
-        t.add_row("Pilot Ceiling", f"${status.pilot_ceiling_usd:.4f}", f"${status.pilot_spend_usd:.4f}", f"${status.remaining_pilot_usd:.4f}")
-        t.add_row("Total Ceiling", f"${status.total_ceiling_usd:.4f}", f"${status.cumulative_spend_usd:.4f}", f"${status.remaining_total_usd:.4f}")
-        self.console.print(t)
-        self.console.print("[dim]Local tracking policy only, not provider-enforced account limit.[/dim]")
+        if cmd in ("models", "m", "1"):
+            self.nav_index = 0
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Switched to Model Catalogue"
+            self.log_buffer.add("INFO", "Navigated to Model Catalogue")
+        elif cmd in ("budget", "b", "2"):
+            self.nav_index = 1
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Switched to Budget & Usage"
+            self.log_buffer.add("INFO", "Navigated to Budget & Usage")
+        elif cmd in ("dataset", "d", "3"):
+            self.nav_index = 2
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Switched to Dataset Validation"
+            self.log_buffer.add("INFO", "Navigated to Dataset Validation")
+        elif cmd in ("eval", "e", "4"):
+            self.nav_index = 3
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Switched to Evaluation Runs"
+            self.log_buffer.add("INFO", "Navigated to Evaluation Runs")
+        elif cmd in ("traces", "t", "5"):
+            self.nav_index = 4
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Switched to Traces & Observability"
+            self.log_buffer.add("INFO", "Navigated to Traces & Observability")
+        elif cmd in ("health", "h", "6"):
+            self.nav_index = 5
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Switched to Project Health"
+            self.log_buffer.add("INFO", "Navigated to Project Health")
+        elif cmd in ("settings", "s", "7"):
+            self.nav_index = 6
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Switched to Settings"
+            self.log_buffer.add("INFO", "Navigated to Settings")
+        elif cmd in ("audit",):
+            self._execute_audit_check()
+        elif cmd in ("refresh", "r"):
+            self.refresh_data()
+            self.feedback_message = "Refreshed models, telemetry, and health diagnostics"
+            self.log_buffer.add("INFO", "Telemetry and SQLite ledger refreshed")
+        elif cmd in ("clear", "cls"):
+            self.search_query = ""
+            self.feedback_message = ""
+        elif cmd in ("help", "?", "8"):
+            self.nav_index = 7
+            self.input_mode = InputMode.NORMAL
+            self.feedback_message = "Displaying Help & Keyboard Shortcuts"
+        elif cmd in ("q", "quit", "exit"):
+            self.should_exit = True
+        else:
+            self.feedback_message = f"Unknown command: ':{cmd}'. Type ':help' for shortcuts."
 
-    def _run_prompt_health(self) -> None:
-        items = run_system_health_checks()
-        from rich.table import Table
-        t = Table(title="Live System Diagnostics", show_header=True, header_style="bold magenta")
-        t.add_column("Component", style="bold white")
-        t.add_column("Status", justify="center")
-        t.add_column("Details", style="cyan")
-        for item in items:
-            badge = "[green]PASS[/green]" if item.status == "PASS" else ("[yellow]WARN[/yellow]" if item.status == "WARN" else "[red]FAIL[/red]")
-            t.add_row(item.component, badge, item.details)
-        self.console.print(t)
-
-    def _run_prompt_audit(self) -> None:
+    def _execute_audit_check(self) -> None:
+        """Executes live knowledge-base audit verification and updates feedback."""
         from pathlib import Path
         from msu_llm_lab.audit.parser import KBParser
         from msu_llm_lab.audit.validator import KBValidator
+
         gen_kb = Path("Copy of MSU General KB - Local - Sudarshan.md")
         if not gen_kb.exists():
-            self.console.print("[red]Source General KB file not found.[/red]")
+            self.feedback_message = "Audit error: Source General KB not found"
+            self.log_buffer.add("ERROR", "Audit check failed: KB not found")
             return
+
         parser = KBParser(gen_kb)
-        q_m, a_m, recs, heads, orphans = parser.parse()
+        _, _, recs, heads, orphans = parser.parse()
         validator = KBValidator(str(gen_kb), recs, heads, orphans)
         issues = validator.validate_all()
-        self.console.print(f"[bold green]Audit Summary for {gen_kb.name}:[/bold green]")
-        self.console.print(f"  Records: {len(recs):,} | Total Issues: {len(issues)} (Deterministic and heuristic)")
-        self.console.print("  [dim]Run 'msu-llm-lab audit-kb' for full report export.[/dim]")
+        self.feedback_message = f"Audit check: {len(recs):,} parsed records, {len(issues)} issues found in {gen_kb.name}"
+        self.log_buffer.add("INFO", f"KB audit completed: {len(recs):,} records, {len(issues)} issues")
 
 
 def run_tui() -> None:
-    """Convenience launcher for the terminal UI."""
+    """Convenience entry point to launch the persistent TUI."""
     app = WorkbenchTUI()
     app.run()
