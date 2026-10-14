@@ -36,6 +36,42 @@ CREATE TABLE IF NOT EXISTS model_portfolio (
     experimental_purpose TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS evaluation_runs (
+    run_id TEXT PRIMARY KEY,
+    timestamp TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    dataset_path TEXT NOT NULL,
+    total_cases INTEGER NOT NULL,
+    completed_cases INTEGER NOT NULL,
+    failed_cases INTEGER NOT NULL,
+    total_cost_usd TEXT NOT NULL,
+    mean_latency_ms REAL NOT NULL,
+    mean_accuracy REAL NOT NULL,
+    mean_groundedness REAL NOT NULL,
+    mean_overall_score REAL NOT NULL,
+    is_dry_run INTEGER NOT NULL DEFAULT 1,
+    notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS evaluation_results (
+    result_id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL,
+    case_id TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    expected_answer TEXT,
+    generated_output TEXT NOT NULL,
+    latency_ms REAL NOT NULL,
+    prompt_tokens INTEGER NOT NULL,
+    completion_tokens INTEGER NOT NULL,
+    cost_usd TEXT NOT NULL,
+    accuracy REAL NOT NULL,
+    groundedness REAL NOT NULL,
+    format_adherence REAL NOT NULL,
+    overall_score REAL NOT NULL,
+    evaluator_notes TEXT,
+    FOREIGN KEY (run_id) REFERENCES evaluation_runs(run_id)
+);
 """
 
 
@@ -200,5 +236,108 @@ class DatabaseManager:
                 FROM model_portfolio
                 ORDER BY deployment_mode, model_id
                 """
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def save_evaluation_run(self, run: Dict[str, Any]) -> None:
+        """Saves a completed or aborted evaluation run header."""
+        with self.get_connection() as conn:
+            conn.execute(
+                """
+                INSERT INTO evaluation_runs (
+                    run_id, timestamp, model_id, dataset_path, total_cases,
+                    completed_cases, failed_cases, total_cost_usd, mean_latency_ms,
+                    mean_accuracy, mean_groundedness, mean_overall_score, is_dry_run, notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(run_id) DO UPDATE SET
+                    completed_cases = excluded.completed_cases,
+                    failed_cases = excluded.failed_cases,
+                    total_cost_usd = excluded.total_cost_usd,
+                    mean_latency_ms = excluded.mean_latency_ms,
+                    mean_accuracy = excluded.mean_accuracy,
+                    mean_groundedness = excluded.mean_groundedness,
+                    mean_overall_score = excluded.mean_overall_score,
+                    notes = excluded.notes
+                """,
+                (
+                    run["run_id"],
+                    run["timestamp"],
+                    run["model_id"],
+                    run["dataset_path"],
+                    run["total_cases"],
+                    run["completed_cases"],
+                    run["failed_cases"],
+                    str(run["total_cost_usd"]),
+                    float(run["mean_latency_ms"]),
+                    float(run["mean_accuracy"]),
+                    float(run["mean_groundedness"]),
+                    float(run["mean_overall_score"]),
+                    1 if run.get("is_dry_run", True) else 0,
+                    run.get("notes", ""),
+                ),
+            )
+            conn.commit()
+
+    def save_evaluation_results(self, results: List[Dict[str, Any]]) -> None:
+        """Batch inserts individual evaluation results."""
+        with self.get_connection() as conn:
+            conn.executemany(
+                """
+                INSERT INTO evaluation_results (
+                    result_id, run_id, case_id, prompt, expected_answer,
+                    generated_output, latency_ms, prompt_tokens, completion_tokens,
+                    cost_usd, accuracy, groundedness, format_adherence, overall_score,
+                    evaluator_notes
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(result_id) DO NOTHING
+                """,
+                [
+                    (
+                        r["result_id"],
+                        r["run_id"],
+                        r["case_id"],
+                        r["prompt"],
+                        r.get("expected_answer", ""),
+                        r["generated_output"],
+                        float(r["latency_ms"]),
+                        int(r["prompt_tokens"]),
+                        int(r["completion_tokens"]),
+                        str(r["cost_usd"]),
+                        float(r["accuracy"]),
+                        float(r["groundedness"]),
+                        float(r["format_adherence"]),
+                        float(r["overall_score"]),
+                        r.get("evaluator_notes", ""),
+                    )
+                    for r in results
+                ],
+            )
+            conn.commit()
+
+    def get_evaluation_run(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """Fetches a specific evaluation run by ID."""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM evaluation_runs WHERE run_id = ?",
+                (run_id,),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def get_all_evaluation_runs(self, limit: int = 50) -> List[Dict[str, Any]]:
+        """Returns recent evaluation runs sorted newest first."""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM evaluation_runs ORDER BY timestamp DESC LIMIT ?",
+                (limit,),
+            )
+            return [dict(row) for row in cursor.fetchall()]
+
+    def get_evaluation_results_for_run(self, run_id: str) -> List[Dict[str, Any]]:
+        """Returns all individual results for a run."""
+        with self.get_connection() as conn:
+            cursor = conn.execute(
+                "SELECT * FROM evaluation_results WHERE run_id = ? ORDER BY result_id",
+                (run_id,),
             )
             return [dict(row) for row in cursor.fetchall()]
