@@ -560,6 +560,181 @@ def compare_runs(
 
 
 # ---------------------------------------------------------------------------
+# Decoupled RAG Benchmark Subcommand
+# ---------------------------------------------------------------------------
+
+
+@app.command("benchmark-rag")
+def benchmark_rag(
+    model: str = typer.Option(
+        "google/gemini-3.5-flash-lite",
+        "--model",
+        "-m",
+        help="Primary candidate model ID to evaluate.",
+    ),
+    dataset: Path = typer.Option(
+        Path("data/evaluation/verified_rag_benchmark.jsonl"),
+        "--dataset",
+        "-d",
+        help="Path to verified evaluation dataset JSONL.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    split: str = typer.Option(
+        "TEST",
+        "--split",
+        "-s",
+        help="Partition split to benchmark: 'TEST', 'DEV', or 'ALL'.",
+    ),
+    retriever_mode: str = typer.Option(
+        "perfect",
+        "--retriever",
+        "-r",
+        help="Retriever configuration: 'perfect', 'noisy', 'empty', or 'bm25'.",
+    ),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--live",
+        help="Run offline mock simulation (default) or live OpenRouter network dispatch.",
+    ),
+    compare_with: Optional[str] = typer.Option(
+        None,
+        "--compare-with",
+        "-c",
+        help="Optional second candidate model ID for side-by-side RAG comparison.",
+    ),
+) -> None:
+    """Benchmark candidate models on decoupled retrieval, generation, and end-to-end RAG metrics."""
+    from msu_llm_lab.dataset.manager import DatasetManager
+    from msu_llm_lab.rag.retriever import KeywordBM25Retriever, MockRetriever
+    from msu_llm_lab.rag.runner import RAGBenchmarkRunner
+    from msu_llm_lab.schemas.evaluation import DatasetSplit
+
+    split_clean = split.strip().upper()
+    split_enum = DatasetSplit(split_clean) if split_clean in DatasetSplit.__members__ else DatasetSplit.UNASSIGNED
+
+    # Initialize retriever
+    if retriever_mode.lower() == "bm25":
+        all_cases = DatasetManager.load_jsonl(dataset)
+        retriever = KeywordBM25Retriever(corpus_cases=all_cases)
+    elif retriever_mode.lower() in ("noisy", "empty"):
+        retriever = MockRetriever(mode=retriever_mode.lower())
+    else:
+        retriever = MockRetriever(mode="perfect")
+
+    mode_str = "[yellow]DRY-RUN (Simulated Offline)[/yellow]" if dry_run else "[red]LIVE (Outbound API Dispatch)[/red]"
+    console.print(Panel(
+        f"[bold cyan]MSU End-to-End RAG Benchmark[/bold cyan]\n"
+        f"[dim]Primary Model:[/dim]  [bold white]{model}[/bold white]\n"
+        f"[dim]Retriever:[/dim]      [bold green]{retriever.__class__.__name__}[/bold green] (mode: {retriever_mode})\n"
+        f"[dim]Dataset:[/dim]        {dataset.name} (Split: {split_clean})\n"
+        f"[dim]Execution Mode:[/dim] {mode_str}",
+        expand=False,
+    ))
+
+    runner = RAGBenchmarkRunner(retriever=retriever)
+    report_a = runner.run(model_id=model, dataset_path=dataset, split=split_enum, dry_run=dry_run)
+
+    # 1. Decoupled Summary Table
+    summary_table = Table(title="Decoupled RAG Performance Summary", show_header=True, header_style="bold magenta")
+    summary_table.add_column("Subsystem / Metric", style="cyan")
+    summary_table.add_column("Value", justify="right", style="bold")
+    summary_table.add_column("Evaluation Context", style="dim")
+
+    summary_table.add_row("Evaluated Cases", f"{report_a.total_cases}", f"Split: {split_clean}")
+    summary_table.add_row("Retrieval Hit Rate", f"{report_a.mean_retrieval_hit_rate * 100:.1f}%", "Grounding passages successfully fetched")
+    summary_table.add_row("Retrieval Precision", f"{report_a.mean_retrieval_precision * 100:.1f}%", "Ratio of target keywords captured")
+    summary_table.add_row("Retrieval Latency", f"{report_a.mean_retrieval_latency_ms:.1f} ms", "Isolated context search turnaround")
+    summary_table.add_row("Answer Correctness", f"{report_a.mean_answer_correctness * 100:.1f}%", "Factual overlap against verified reference")
+    summary_table.add_row("Groundedness (Faithfulness)", f"{report_a.mean_groundedness * 100:.1f}%", "Supported by context (hallucination check)")
+    summary_table.add_row("Generation Latency", f"{report_a.mean_generation_latency_ms:.1f} ms", "Isolated LLM inference turnaround")
+    summary_table.add_row("End-to-End Latency", f"[bold yellow]{report_a.mean_e2e_latency_ms:.1f} ms[/bold yellow]", "Total user turnaround (Ret + Gen)")
+    summary_table.add_row("Run Spend (USD)", f"${report_a.total_cost_usd:.4f}", "Tracked in budget ledger")
+
+    console.print(summary_table)
+
+    # 2. Failure Attribution Breakdown
+    attr_table = Table(title="Failure Attribution Analysis", show_header=True, header_style="bold magenta")
+    attr_table.add_column("Attribution Category", style="bold")
+    attr_table.add_column("Count", justify="right")
+    attr_table.add_column("% Share", justify="right")
+    attr_table.add_column("Diagnosis / Implication", style="dim")
+
+    tot = max(1, report_a.total_cases)
+    for cat, cnt in report_a.failure_breakdown.items():
+        pct = (cnt / tot) * 100
+        if cat == "SYSTEM_SUCCESS":
+            diag = "[green]Both retrieval and generation satisfied criteria[/green]"
+        elif cat == "RETRIEVAL_FAILURE":
+            diag = "[red]Retriever starved model of necessary context[/red]"
+        elif cat == "GENERATION_FAILURE":
+            diag = "[yellow]Context available, but model hallucinated or erred[/yellow]"
+        else:
+            diag = "[blue]Model answered correctly despite weak context[/blue]"
+        attr_table.add_row(cat, str(cnt), f"{pct:.1f}%", diag)
+
+    console.print(attr_table)
+
+    # 3. Per-Case Performance Table
+    case_table = Table(title="Per-Case Decoupled Breakdown", show_header=True, header_style="bold blue")
+    case_table.add_column("Case ID", style="cyan", width=16)
+    case_table.add_column("Query Snippet", style="white", width=30)
+    case_table.add_column("Ret. Hit", justify="right", width=9)
+    case_table.add_column("Correct.", justify="right", width=9)
+    case_table.add_column("Ground.", justify="right", width=9)
+    case_table.add_column("E2E Lat.", justify="right", width=10)
+    case_table.add_column("Attribution", style="bold", width=18)
+
+    for c in report_a.case_results:
+        q_snip = c.query[:28] + "..." if len(c.query) > 28 else c.query
+        attr_style = "[green]SUCCESS[/green]" if c.failure_attribution == "SYSTEM_SUCCESS" else f"[red]{c.failure_attribution}[/red]"
+        case_table.add_row(
+            c.case_id,
+            q_snip,
+            f"{c.retrieval_hit_rate * 100:.0f}%",
+            f"{c.answer_correctness * 100:.0f}%",
+            f"{c.groundedness * 100:.0f}%",
+            f"{c.e2e_latency_ms:.0f} ms",
+            attr_style,
+        )
+    console.print(case_table)
+
+    # Optional Multi-Model Comparison
+    if compare_with:
+        console.print(Panel(
+            f"[bold cyan]Running Side-by-Side Model Comparison[/bold cyan]\n"
+            f"[dim]Comparison Candidate:[/dim] [bold white]{compare_with}[/bold white]",
+            expand=False,
+        ))
+        runner_b = RAGBenchmarkRunner(retriever=retriever)
+        report_b = runner_b.run(model_id=compare_with, dataset_path=dataset, split=split_enum, dry_run=dry_run)
+
+        comp_table = Table(title=f"Comparative Benchmark: {model} vs {compare_with}", show_header=True, header_style="bold magenta")
+        comp_table.add_column("Metric", style="cyan")
+        comp_table.add_column(f"{model[:18]} (A)", justify="right")
+        comp_table.add_column(f"{compare_with[:18]} (B)", justify="right")
+        comp_table.add_column("Delta (B - A)", justify="right")
+
+        def _fmt_delta(delta: float, is_pct: bool = False, reverse: bool = False) -> str:
+            sign = "+" if delta > 0 else ""
+            txt = f"{sign}{delta * 100:.1f}%" if is_pct else f"{sign}{delta:.1f}"
+            if delta == 0:
+                return f"[dim]{txt}[/dim]"
+            is_good = (delta > 0) if not reverse else (delta < 0)
+            return f"[green]{txt}[/green]" if is_good else f"[red]{txt}[/red]"
+
+        comp_table.add_row("Answer Correctness", f"{report_a.mean_answer_correctness * 100:.1f}%", f"{report_b.mean_answer_correctness * 100:.1f}%", _fmt_delta(report_b.mean_answer_correctness - report_a.mean_answer_correctness, is_pct=True))
+        comp_table.add_row("Groundedness", f"{report_a.mean_groundedness * 100:.1f}%", f"{report_b.mean_groundedness * 100:.1f}%", _fmt_delta(report_b.mean_groundedness - report_a.mean_groundedness, is_pct=True))
+        comp_table.add_row("Generation Latency", f"{report_a.mean_generation_latency_ms:.1f} ms", f"{report_b.mean_generation_latency_ms:.1f} ms", _fmt_delta(report_b.mean_generation_latency_ms - report_a.mean_generation_latency_ms, reverse=True))
+        comp_table.add_row("End-to-End Latency", f"{report_a.mean_e2e_latency_ms:.1f} ms", f"{report_b.mean_e2e_latency_ms:.1f} ms", _fmt_delta(report_b.mean_e2e_latency_ms - report_a.mean_e2e_latency_ms, reverse=True))
+        comp_table.add_row("Total Run Spend", f"${report_a.total_cost_usd:.4f}", f"${report_b.total_cost_usd:.4f}", f"${report_b.total_cost_usd - report_a.total_cost_usd:+.4f}")
+
+        console.print(comp_table)
+
+
+# ---------------------------------------------------------------------------
 # Langfuse Trace Diagnostic Subcommand
 # ---------------------------------------------------------------------------
 
