@@ -101,6 +101,28 @@ def test_render_sparkline():
     assert empty_spark == "────"
 
 
+def test_render_2row_histogram_and_empty_state():
+    """Verify 2-row histogram graphs render both tiers accurately with explicit empty states."""
+    from msu_llm_lab.tui.theme import render_2row_histogram
+
+    # 1. Empty state produces clean baseline with no fabricated bars
+    top_empty, bot_empty, base_empty = render_2row_histogram([], 0.0, 100.0, width=10)
+    assert top_empty == " " * 10
+    assert bot_empty == " " * 10
+    assert base_empty == "─" * 10
+
+    # 2. Values in lower tier (0 to 50%) populate bottom row only
+    top_low, bot_low, base_low = render_2row_histogram([25.0], 0.0, 100.0, width=1)
+    assert top_low == " "
+    assert bot_low != " "
+    assert base_low == "─"
+
+    # 3. Values in upper tier (50% to 100%) saturate bottom row and populate top row
+    top_high, bot_high, base_high = render_2row_histogram([100.0], 0.0, 100.0, width=1)
+    assert top_high == "█"
+    assert bot_high == "█"
+    assert base_high == "─"
+
 
 def test_log_buffer_rolling_history():
     """Verify LogBuffer appends messages and truncates at max_size."""
@@ -219,7 +241,19 @@ def test_panel_renderers():
     assert "RECENT LOGS" in out_bottom
     assert "BUDGET USAGE" in out_bottom
     assert "DATASETS" in out_bottom
-    assert "command >" in out_bottom
+    assert "msu-llm-lab >" in out_bottom
+
+
+def test_monochrome_selection_and_palette():
+    """Verify restrained monochrome palette and inverted selection highlights."""
+    from msu_llm_lab.tui.theme import STYLE_ROW_SELECTED, BG_DARK, TEXT_PRIMARY, BORDER_CHARCOAL
+
+    assert BG_DARK == "#1C1C1C"
+    assert TEXT_PRIMARY == "#D0D0D0"
+    assert BORDER_CHARCOAL == "#383838"
+    # Inverted selection: dark text on light gray background
+    assert STYLE_ROW_SELECTED.color.name.lower() == "#1c1c1c"
+    assert STYLE_ROW_SELECTED.bgcolor.name.lower() == "#d0d0d0"
 
 
 def test_workbench_tui_btop_layout():
