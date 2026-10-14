@@ -1,384 +1,304 @@
 <div align="center">
-  <img src="assets/readme/hero.png" alt="MSU LLM Inference Workbench terminal dashboard in charcoal monochrome" width="100%" />
 
-  <h1>MSU LLM Inference Workbench</h1>
+<img src="assets/readme/hero.png" alt="MSU LLM Inference Workbench — terminal dashboard" width="100%" />
 
-  <p><strong>Model evaluation · Inference systems · Observability</strong></p>
+<br />
 
-  <p>A local-first engineering workbench for auditing admissions knowledge bases, evaluating candidate language models, tracking experiment budgets, and investigating inference-system behavior.</p>
+# MSU LLM Inference Workbench
 
-  <p>
-    <img src="https://img.shields.io/badge/python-3.11+-1C1C1C?style=flat-square&logo=python&logoColor=D0D0D0" alt="Python 3.11+" />
-    <img src="https://img.shields.io/badge/status-phase_1_complete-1C1C1C?style=flat-square" alt="Phase 1 Complete" />
-    <img src="https://img.shields.io/badge/mode-local_dry--run-1C1C1C?style=flat-square" alt="Local Dry-Run Mode" />
-    <img src="https://img.shields.io/badge/spend-$0.0000_baseline-1C1C1C?style=flat-square" alt="Zero Spend Baseline" />
-    <img src="https://img.shields.io/badge/tests-37_passing-1C1C1C?style=flat-square" alt="37 Passing Tests" />
-  </p>
+### Audit the knowledge base. Evaluate the models. Cap the spend. Understand the serving stack.
+
+**A local-first, zero-network engineering workbench for evaluating LLMs behind a university admissions counsellor.**
+
+<br />
+
+[![Python](https://img.shields.io/badge/python-3.11+-1C1C1C?style=for-the-badge&logo=python&logoColor=D0D0D0)](https://www.python.org/)
+[![Phase](https://img.shields.io/badge/phase-1_complete-1C1C1C?style=for-the-badge)](#roadmap)
+[![Network](https://img.shields.io/badge/network-offline-1C1C1C?style=for-the-badge)](#safety-model)
+[![Spend](https://img.shields.io/badge/spend-$0.00-1C1C1C?style=for-the-badge)](#budget-ledger)
+[![Tests](https://img.shields.io/badge/tests-pytest-1C1C1C?style=for-the-badge&logo=pytest&logoColor=D0D0D0)](#development)
+
+[**Quick Start**](#quick-start) ·
+[**Features**](#features) ·
+[**Architecture**](#architecture) ·
+[**Safety Model**](#safety-model) ·
+[**Roadmap**](#roadmap) ·
+[**Docs**](#documentation)
+
 </div>
 
 ---
 
-## Project Status
+## Why this exists
 
-The workbench is in **active research and development**. The project foundation, knowledge-base audit engine, persistent budget ledger, candidate model catalogue, and terminal interface (TUI) are fully implemented and verified locally.
+Management and Science University (MSU), Malaysia runs an AI counsellor that answers questions about programmes, entry requirements, fees and procedures. It is only as good as two things: **the knowledge base behind it** and **the model serving it**.
 
-| Operational Dimension | Current State | Verification Detail |
-|---|---|---|
-| **Development Phase** | Phase 1 Complete / Phase 2 Ready | Knowledge-base audit, remediation engine, budget ledger, and TUI operational |
-| **Execution Mode** | `LOCAL_ONLY` (Offline) | All CLI operations run against local disk and SQLite; zero outbound network calls |
-| **Provider API Calls** | **Disabled** | No live API requests or external calls enabled; all baseline metrics at `$0.0000` |
-| **Data Safety** | Read-Only & Immutability Enforced | Source markdown files protected with pre- and post-execution SHA-256 hash checks |
-| **Test Suite** | **37 / 37 Passing** | Automated pytest coverage across parser, budget ledger, remediation, and TUI |
+Most teams swap models and tune prompts while ignoring the first problem. A question tagged "Accounting" sitting in a Broadcasting section, or a PhD fee quoted as both RM62,500 and RM63,500 in one answer, will make *any* model hallucinate.
 
----
+This workbench attacks both problems, in order:
 
-## Why This Project Exists
+| Step | Question it answers | Status |
+|:--:|---|:--:|
+| **1** | Is the knowledge base actually correct? | Shipped |
+| **2** | Can we build a leak-free evaluation dataset from it? | Next |
+| **3** | Which model gives the best accuracy, groundedness, latency and cost? | Planned |
+| **4** | Why do production answers fail — routing, retrieval, generation or KB? | Planned |
+| **5** | Can we serve a small open-weight model ourselves with vLLM? | Planned |
 
-Management and Science University (MSU), Malaysia, deploys an AI counsellor to assist prospective and current students with academic programmes, entry requirements, tuition fees, and administrative procedures.
-
-This workbench provides an offline, evidence-based systems environment to:
-
-1. **Audit Knowledge-Base Quality**: Identify syntax flaws, unclosed tags, duplicate questions, and contradictory figures (such as conflicting fee amounts) in source documents before they can cause model hallucinations.
-2. **Build Controlled Evaluation Datasets**: Standardize evaluation cases with strict confidentiality boundaries (`PUBLIC`, `SYNTHETIC`, `INTERNAL`, `CONFIDENTIAL`, `UNCLASSIFIED`) and cross-split leakage prevention (*Phase 2*).
-3. **Benchmark Candidate Language Models**: Compare proprietary baselines against efficient open-weight models (such as `Qwen 3 8B` and `Qwen 3 14B`) for accuracy, groundedness, latency, and cost (*Phase 3*).
-4. **Enforce Local Budget Policies**: Prevent runaway experiment costs using a local SQLite-backed ledger with strict pilot ($2.00) and cumulative ($10.00) ceilings, per-run caps, and circuit breakers.
-5. **Investigate Inference Serving & Concurrency**: Profile self-hosted serving using vLLM, measuring token throughput, TTFT (time-to-first-token), KV-cache memory footprints, and multi-user concurrency limits (*Phase 6*).
+Everything runs on your laptop, against local files and SQLite, with **no outbound network calls and no API keys**.
 
 ---
 
-## System Capabilities
+## Features
 
-| Capability | Module | Description | Status |
-|---|---|---|---|
-| **KB Syntax & Structure Parser** | `msu_llm_lab.audit.parser` | Parses escaped markdown tags (`\*\*Question:\*\*`, `\*\*Answer:\*\*`, `\#\#`), normalizes multiline records, and flags orphan lines. | **Implemented** |
-| **Deterministic & Heuristic Validator** | `msu_llm_lab.audit.validator` | Detects missing answers, empty question fields, verbatim duplicate questions, and conflicting tuition amounts. | **Implemented** |
-| **Cryptographic Hash Verification** | `msu_llm_lab.cli` | Computes pre- and post-audit SHA-256 checksums to verify source knowledge-base files remain 100% immutable. | **Implemented** |
-| **Remediation & Patch Engine** | `msu_llm_lab.remediation` | Isolates confirmed content defects from contradictory figures requiring official verification; generates versioned clean copies. | **Implemented** |
-| **Persistent Budget Ledger** | `msu_llm_lab.core.budget` | SQLite-backed ACID tracking for pilot ($2.00) and total ($10.00) policy ceilings, run estimates, and per-case circuit breakers. | **Implemented** |
-| **Candidate Portfolio Catalogue** | `msu_llm_lab.models.catalog` | Stores evaluation candidate definitions, preliminary token pricing, deployment modes, and verification statuses. | **Implemented** |
-| **Charcoal Terminal UI (TUI)** | `msu_llm_lab.tui` | Full-screen terminal dashboard with system telemetry, candidate inspector, audit views, and monochrome histogram charts. | **Implemented** |
-| **Evaluation Schemas & Leakage Detector** | `msu_llm_lab.dataset` | Pydantic evaluation schemas with fail-closed confidentiality gating and n-gram train/dev/test leakage detection. | *Planned (Phase 2)* |
-| **Fail-Closed OpenRouter Provider** | `msu_llm_lab.providers` | Evaluates approved non-sensitive cases against hosted APIs with secret scrubbing, rate-limit backoff, and dry-run mocks. | *Planned (Phase 3)* |
-| **Offline RAG Trace Analyzer** | `msu_llm_lab.traces` | Ingests redacted Langfuse exports to diagnose routing, retrieval, generation, and source knowledge failure modes. | *Planned (Phase 4)* |
-| **Inference Serving Benchmarks** | `msu_llm_lab.serving` | Benchmarks local vLLM deployments across concurrency levels, prompt lengths, and KV-cache configurations. | *Planned (Phase 6)* |
+<table>
+<tr>
+<td width="50%" valign="top">
 
----
+### Knowledge-Base Audit
+Parses messy, escaped markdown (`\*\*Question:\*\*`) into structured records and flags:
+- missing / empty questions and answers
+- exact and normalized duplicate questions
+- conflicting RM fee figures in one answer
+- question ↔ section programme mismatches
+- time-sensitive intake dates and years
+- stray tokens and malformed headings
 
-## Architecture Overview
+Outputs a terminal summary plus CSV and Markdown reports.
 
-```mermaid
-graph TD
-    subgraph Local_Workstation ["Local Workstation (Offline Environment)"]
-        CLI["CLI Entry Point<br/>(msu-llm-lab)"]
-        TUI["Charcoal Terminal UI<br/>(Rich / Textual Patterns)"]
-        
-        subgraph Audit_Subsystem ["Knowledge Base Subsystem (Implemented)"]
-            Parser["KB Parser<br/>(Escaped Tag Normalizer)"]
-            Validator["KB Validator<br/>(Deterministic & Heuristics)"]
-            Reporter["Audit Reporter<br/>(CSV / Markdown Summaries)"]
-            Remediation["Remediation Engine<br/>(Clean Copy Generator)"]
-        end
+</td>
+<td width="50%" valign="top">
 
-        subgraph Budget_Subsystem ["Local Ledger & Storage (Implemented)"]
-            SQLite[("SQLite Database<br/>~/.msu_llm_lab/workbench.db")]
-            Ledger["Budget Ledger Service<br/>($10 Total / $2 Pilot Ceilings)"]
-            Catalog["Candidate Model Portfolio<br/>(Preliminary Specifications)"]
-        end
+### Provable Immutability
+Source files are **never** modified. Every audit and remediation computes a SHA-256 hash before and after. Any byte-level difference aborts the run with exit code `2`.
 
-        subgraph Future_Phases ["Evaluation & Serving Pipeline (Planned)"]
-            DatasetMgr["Dataset Manager & Leakage Detector<br/>(Phase 2)"]
-            PrivacyGate["Fail-Closed Privacy Gatekeeper<br/>(Blocks Non-Public Records)"]
-            ProviderAdapter["OpenRouter Provider Adapter<br/>(Phase 3)"]
-            TraceImporter["Redacted Langfuse Trace Importer<br/>(Phase 4)"]
-            vLLMServer["Local vLLM Serving Benchmark<br/>(Phase 6)"]
-        end
-    end
+Remediation writes a **separate versioned copy**, and anything ambiguous is escalated to a human instead of guessed.
 
-    CLI --> TUI
-    CLI --> Parser
-    CLI --> Remediation
-    CLI --> Ledger
-    CLI --> Catalog
-    Parser --> Validator --> Reporter
-    Ledger --> SQLite
-    Catalog --> SQLite
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
 
-    CLI -.-> DatasetMgr
-    DatasetMgr -.-> PrivacyGate
-    PrivacyGate -.-> ProviderAdapter
-    CLI -.-> TraceImporter
-    CLI -.-> vLLMServer
+### Budget Ledger
+A SQLite-backed ledger with exact `Decimal` arithmetic and integer micro-dollars, enforcing:
 
-    classDef implemented fill:#2A2A2A,stroke:#666,stroke-width:1px,color:#D0D0D0;
-    classDef planned fill:#1C1C1C,stroke:#444,stroke-width:1px,stroke-dasharray: 5 5,color:#888888;
-    classDef storage fill:#222222,stroke:#555,stroke-width:1px,color:#E0E0E0;
+| Limit | Default |
+|---|--:|
+| Total experiment ceiling | `$10.00` |
+| Pilot ceiling | `$2.00` |
+| Per-run cap | `$0.50` |
+| Per-case cap | `$0.02` |
 
-    class CLI,TUI,Parser,Validator,Reporter,Remediation,Ledger,Catalog implemented;
-    class SQLite storage;
-    class DatasetMgr,PrivacyGate,ProviderAdapter,TraceImporter,vLLMServer planned;
-```
+</td>
+<td width="50%" valign="top">
 
----
-
-## Installation & Quick Start
-
-### Prerequisites
-- Python 3.11 or newer
-- [`uv`](https://github.com/astral-sh/uv) (recommended) or standard `pip`
-
-### 1. Environment Setup
+### Terminal Dashboard
+A charcoal-monochrome, full-screen TUI in the spirit of `btop` and `lazygit`: system health, candidate-model inspector, audit findings, and spend status in one place.
 
 ```bash
-# Clone the repository
+uv run msu-llm-lab ui
+```
+
+</td>
+</tr>
+</table>
+
+### Remediation, with a conscience
+
+Findings are classified, not just fixed:
+
+| Classification | Example | Action |
+|---|---|---|
+| `CONFIRMED_CONTENT_DEFECT` | "Bachelor in Accounting" question under the Broadcasting section | **Auto-fixed** into a clean copy |
+| `CONTRADICTORY_FACT` | PhD fee quoted as RM62,500 *and* RM63,500 | **Blocked**, needs official verification |
+| `POLICY_INTAKE_DATE` | Intake months and years from 2022–2025 | **Flagged**, needs admissions calendar |
+| `CURRICULUM_MPU_RULE` | MUET Band 3 vs Band 4 across faculties | **Escalated** to KB owner |
+| `DUPLICATE_ENTRY` | Same question repeated across programmes | **Investigated** before merging |
+
+> The system will never silently pick a number. If two facts disagree, a human decides.
+
+---
+
+## Quick Start
+
+**Requirements:** Python 3.11+ and [`uv`](https://github.com/astral-sh/uv) (or plain `pip`).
+
+```bash
 git clone https://github.com/Sudharsanselvaraj/Model-Systems-Workbench.git
 cd Model-Systems-Workbench
 
-# Create virtual environment and install dependencies with uv
-uv sync
-
-# Or using standard pip
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e ".[dev]"
+uv sync                      # or: pip install -e ".[dev]"
 ```
 
-### 2. Launch the Interactive Terminal UI
-
-The workbench includes a full-screen, charcoal-monochrome dashboard inspired by `btop` and `lazygit`:
+### Try it in 30 seconds
 
 ```bash
-# Launch interactive TUI
-uv run msu-llm-lab ui
-
-# Or using the root command directly
-uv run msu-llm-lab
+uv run msu-llm-lab ui                  # full-screen dashboard
+uv run msu-llm-lab budget status       # spend vs. policy ceilings
+uv run msu-llm-lab models list         # candidate model portfolio
 ```
 
-*Keybindings in TUI:*
-- `Tab` / `Shift+Tab`: Cycle between tabs (`[1] Dashboard`, `[2] Models`, `[3] Audit`, `[4] Traces`)
-- `↑` / `↓` / `k` / `j`: Navigate candidate list or logs
-- `b`: Open spend ledger status
-- `r`: Refresh telemetry and views
-- `q`: Exit
-
-### 3. Verify Budget Status
-
-Inspect current local spend, configured policy ceilings, and per-run safety rules:
+### Audit a knowledge base
 
 ```bash
-uv run msu-llm-lab budget status
+# Safe dry-run: summary only, nothing written
+uv run msu-llm-lab audit-kb "path/to/kb.md" --dry-run
+
+# Full run: CSV + Markdown reports
+uv run msu-llm-lab audit-kb "path/to/kb.md" --output-dir reports
 ```
 
-*Output summary:*
+### Remediate (original file stays untouched)
+
+```bash
+# Preview the plan
+uv run msu-llm-lab remediate-kb "path/to/kb.md"
+
+# Write a versioned clean copy
+uv run msu-llm-lab remediate-kb "path/to/kb.md" \
+  --apply --output data/remediated/MSU_Programmes_KB_v1.1_clean.md
+```
+
+### Keybindings
+
+| Key | Action |
+|---|---|
+| `Tab` / `Shift+Tab` | Cycle tabs: Dashboard · Models · Audit · Traces |
+| `↑` `↓` / `j` `k` | Navigate lists |
+| `b` | Spend ledger |
+| `r` | Refresh |
+| `q` | Quit |
+
+---
+
+## Architecture
+
+```mermaid
+graph LR
+    subgraph Local["Local machine · no network"]
+        CLI["CLI<br/>msu-llm-lab"] --> TUI["Terminal UI"]
+
+        subgraph KB["Knowledge-base subsystem"]
+            P["Parser"] --> V["Validator"] --> R["Reporter"]
+            RM["Remediation<br/>engine"]
+        end
+
+        subgraph Ledger["Governance"]
+            B["Budget service"] --> DB[("SQLite")]
+            C["Model catalog"] --> DB
+        end
+
+        CLI --> P
+        CLI --> RM
+        CLI --> B
+        CLI --> C
+    end
+
+    subgraph Next["Planned"]
+        D["Dataset + leakage<br/>detector"]:::p --> G["Confidentiality<br/>gate"]:::p --> O["OpenRouter<br/>provider"]:::p
+        T["Trace analyzer"]:::p
+        S["vLLM serving<br/>benchmarks"]:::p
+    end
+
+    CLI -.-> D
+    CLI -.-> T
+    CLI -.-> S
+
+    classDef p fill:#1C1C1C,stroke:#444,stroke-dasharray:5 5,color:#888;
+```
+
+### Repository layout
+
 ```text
-Spend & Policy Overview
-─────────────────────────────────────────────────────────────────────────────
-Initial Pilot Budget       $2.0000     $0.0000     $2.0000     ACTIVE
-Total Experiment Ceiling  $10.0000     $0.0000    $10.0000     ACTIVE
-
-Per-Execution Safety Rules
-─────────────────────────────────────────────────────────────────────────────
-Max Single Run Spend       $0.5000     Preflight check rejects run if exceeded
-Max Single Case Spend      $0.0200     Per-case circuit breaker halts run
-Execution Mode             Dry-Run     Requires explicit confirmation
-```
-
-### 4. Inspect Model Evaluation Portfolio
-
-List current candidate models registered in the local SQLite portfolio:
-
-```bash
-uv run msu-llm-lab models list
-```
-
-### 5. Run a Safe Knowledge-Base Audit
-
-Audit a source knowledge-base markdown document without modifying the file. Pre- and post-execution SHA-256 checksums guarantee zero data mutation:
-
-```bash
-# Safe dry-run audit (in-memory summary only)
-uv run msu-llm-lab audit-kb "Copy of MSU Programmes KB - Local - Sudharsan.md" --dry-run
-
-# Full audit producing structured CSV and Markdown reports
-uv run msu-llm-lab audit-kb "Copy of MSU Programmes KB - Local - Sudharsan.md" --output-dir reports
-```
-
-### 6. Inspect Remediation Findings
-
-Review confirmed defects vs contradictory facts requiring official MSU verification:
-
-```bash
-# Dry-run evaluation of remediation rules
-uv run msu-llm-lab remediate-kb "Copy of MSU Programmes KB - Local - Sudharsan.md"
-
-# Generate a clean, versioned copy (original file remains untouched)
-uv run msu-llm-lab remediate-kb "Copy of MSU Programmes KB - Local - Sudharsan.md" \
-  --apply \
-  --output data/remediated/MSU_Programmes_KB_v1.1_clean.md
+src/msu_llm_lab/
+├── cli.py              # Typer entry point: ui, audit-kb, remediate-kb, budget, models
+├── audit/              # parser · validator · reporter · issue models
+├── remediation/        # engine · registry of curated findings · models
+├── core/               # config & BudgetPolicy · BudgetService
+├── storage/            # SQLite manager (ledger + model portfolio)
+├── models/             # candidate model catalog
+└── tui/                # app loop · screens · health · telemetry · theme · input
+tests/                  # audit · budget · remediation · TUI
+docs/                   # ARCHITECTURE · IMPLEMENTATION_PLAN · PROJECT_MAP
 ```
 
 ---
 
-## Candidate Model Portfolio
+## Safety model
 
-The evaluation portfolio tracks candidate architectures for prospective migration from hosted APIs to self-hosted inference.
+Five invariants are non-negotiable:
+
+1. **Immutable sources.** Pre/post SHA-256 verification on every command; mismatch → exit `2`.
+2. **No guessing.** Contradictory facts are escalated, never auto-resolved.
+3. **Fail-closed confidentiality** *(Phase 2)*. Only `PUBLIC` or `SYNTHETIC` records may ever leave the machine. `INTERNAL`, `CONFIDENTIAL` and `UNCLASSIFIED` are blocked before dispatch.
+4. **No secrets in git.** `.env`, keys, `data/`, `reports/`, `*.db` and the university's KB files are all git-ignored.
+5. **Local spend ceilings.** Policy limits halt work on your machine before a provider account is touched.
 
 > [!NOTE]
-> All entries in the catalog are currently designated `UNVERIFIED_CATALOG_ENTRY`. They represent planning baselines and preliminary pricing; they have **not yet been dispatched against live APIs** (scheduled for Phase 3 under strict confidentiality guardrails).
-
-| Model Identifier | Display Name | Target Deployment | Est. $/1M (In / Out) | License | Role in Evaluation |
-|---|---|---|---|---|---|
-| `google/gemini-3.5-flash-lite` | Gemini 3.5 Flash Lite | Hosted Direct | $0.08 / $0.30 | Proprietary Commercial API | High-throughput multimodal baseline for student counselling triage |
-| `anthropic/claude-haiku-5.5` | Claude Haiku 5.5 | Hosted Direct | $0.80 / $4.00 | Proprietary Commercial API | Fast hosted candidate for complex query reasoning |
-| `openai/gpt-6-luna` | GPT-6 Luna | Hosted Direct | $0.15 / $0.60 | Proprietary Commercial API | Quality ceiling reference for evaluation scoring |
-| `qwen/qwen3-8b` | Qwen 3 8B | Self-Hosted (vLLM) / Hosted | $0.20 / $0.20 | Open (License TBD) | Primary open-weight candidate for self-hosted serving |
-| `qwen/qwen3-14b` | Qwen 3 14B | Self-Hosted (vLLM) / Hosted | $0.35 / $0.40 | Open (License TBD) | Secondary open-weight candidate for capacity and reasoning comparison |
+> Budget ceilings are **local governance limits**, not provider-enforced balances. Set hard limits in your provider dashboard too.
 
 ---
 
-## Data Integrity, Confidentiality & Safety Boundaries
+## Candidate model portfolio
 
-The workbench operates under strict safety invariants designed for institutional research:
+All entries are `UNVERIFIED_CATALOG_ENTRY`: planning baselines with preliminary pricing, **not yet called against any live API**.
 
-1. **Source File Immutability**: Original knowledge-base markdown files are strictly read-only. Audit commands compute a pre-execution SHA-256 hash and verify it against a post-execution hash. If any byte difference is detected, the process aborts with an exit code of `2`.
-2. **Deterministic Remediation**: Remediation rules produce separate versioned clean files. The system never silently corrects or guesses contradictory values (such as whether an Applied Science PhD fee is RM62,500 or RM63,500); discrepancies are categorized as `OFFICIAL_VERIFICATION_PENDING` and escalated to human academic reviewers.
-3. **Fail-Closed Confidentiality Gate**: Before any future external API call is dispatched, records must pass through a strict classification gatekeeper. Only items explicitly categorized as `PUBLIC` or `SYNTHETIC` are eligible for external routing. `UNCLASSIFIED`, `INTERNAL`, and `CONFIDENTIAL` records are blocked before network dispatch.
-4. **Credential Isolation**: No API keys, tokens, or credentials are hardcoded or tracked in version control. `.gitignore` explicitly excludes `.env`, `data/`, `reports/`, and SQLite databases (`*.sqlite`, `*.db`).
-5. **Budget Ceilings**: Local policy limits ($10.00 cumulative ceiling, $2.00 pilot ceiling, $0.50 per-run cap, $0.02 per-case circuit breaker) halt execution locally before external accounts can incur unexpected costs.
-
----
-
-## Engineering Roadmap
-
-```text
-[✓] Phase 0: Workspace Discovery & Architectural Alignment
-    ├── Repository inventory and formatting quirk analysis
-    ├── Distinct accounting: raw markers vs parsed records vs defects
-    └── Approved implementation plan & security boundaries
-
-[✓] Phase 1: Knowledge-Base Audit & Local Systems Foundation
-    ├── Resilient markdown parser with escaped tag support
-    ├── Deterministic checks and heuristic anomaly validators
-    ├── Cryptographic hash checks ensuring source immutability
-    ├── Remediation engine with human escalation categories
-    ├── Persistent SQLite budget ledger and policy ceilings
-    ├── Candidate portfolio catalog management
-    └── Charcoal-monochrome terminal UI (btop-inspired)
-
-[ ] Phase 2: Evaluation Dataset, Schemas & Leakage Prevention (Next Milestone)
-    ├── Formal Pydantic schemas (EvaluationCase, VerificationStatus)
-    ├── Fail-closed confidentiality categorization
-    ├── Dataset split manager (train / dev / test)
-    ├── N-gram lexical cross-split leakage detector
-    └── Verified synthetic seed dataset
-
-[ ] Phase 3: Reproducible OpenRouter Model Evaluation
-    ├── Provider abstraction with rate-limit retry backoff
-    ├── Preflight secret scrubbing and zero-network dry-run mode
-    ├── Automated prompt versioning and token count tracking
-    └── Empirical comparison across accuracy, groundedness, and latency
-
-[ ] Phase 4: Offline RAG Analysis & Langfuse Trace Ingestion
-    ├── Redacted Langfuse export parser (JSON / CSV)
-    ├── Automated failure classification (routing, retrieval, generation, KB)
-    └── Diagnostic reports with hypothesis tagging
-
-[ ] Phase 5: Fine-Tuning Feasibility & Dataset Preparation
-    ├── Domain adaptation dataset extraction from verified KB records
-    ├── Parameter-efficient fine-tuning (LoRA / QLoRA) configuration manifests
-    └── Target GPU memory and compute requirement projections
-
-[ ] Phase 6: Local Inference Serving Benchmarks (vLLM)
-    ├── Docker / containerized vLLM serving configuration
-    ├── Concurrency profiling (1, 5, 10, 25 concurrent requests)
-    ├── TTFT and token generation throughput measurement
-    └── KV-cache memory pressure and sizing analysis
-
-[ ] Phase 7: Local Research Dashboard
-    ├── Interactive visualization for multi-model benchmark results
-    └── Latency vs quality trade-off frontiers
-```
+| Model | Role | Deployment | $/1M in / out |
+|---|---|---|--:|
+| `google/gemini-3.5-flash-lite` | High-throughput triage baseline | Hosted direct | 0.075 / 0.30 |
+| `anthropic/claude-haiku-5.5` | Fast hosted reasoning candidate | OpenRouter | 0.80 / 4.00 |
+| `openai/gpt-6-luna` | Quality-ceiling reference | OpenRouter | 0.15 / 0.60 |
+| `qwen/qwen3-8b` | Primary open-weight candidate | OpenRouter → vLLM | 0.20 / 0.20 |
+| `qwen/qwen3-14b` | Capacity / reasoning comparison | OpenRouter → vLLM | 0.35 / 0.40 |
 
 ---
 
-## Repository Layout
+## Roadmap
 
-```text
-Model-Systems-Workbench/
-├── assets/
-│   └── readme/
-│       └── hero.png                     # Terminal dashboard hero image
-├── docs/
-│   ├── ARCHITECTURE.md                  # System architecture and security boundaries
-│   ├── IMPLEMENTATION_PLAN.md           # Multi-phase engineering roadmap
-│   └── PROJECT_MAP.md                   # Workspace inventory and file conventions
-├── src/
-│   └── msu_llm_lab/
-│       ├── __init__.py                  # Package root and version
-│       ├── cli.py                       # Typer CLI application entry point
-│       ├── audit/                       # Phase 1: KB audit subsystem
-│       │   ├── models.py                # Audit issue models and severities
-│       │   ├── parser.py                # Escaped markdown tag parser
-│       │   ├── reporter.py              # CSV and Markdown report generators
-│       │   └── validator.py             # Deterministic and heuristic validators
-│       ├── core/                        # Core system services
-│       │   ├── budget.py                # Spend tracking and policy limit checks
-│       │   └── db.py                    # SQLite database manager
-│       ├── models/                      # Model catalog subsystem
-│       │   └── catalog.py               # Candidate model definitions and seeding
-│       ├── remediation/                 # KB remediation subsystem
-│       │   ├── engine.py                # Remediation engine & clean writer
-│       │   ├── models.py                # Finding classifications and statuses
-│       │   └── rules.py                 # Confirmed defect remediation rules
-│       └── tui/                         # Terminal user interface
-│           ├── app.py                   # Persistent application loop
-│           ├── charts.py                # Monochrome histogram renderers
-│           ├── screens.py               # Panel renderers (Dashboard, Models, Audit)
-│           └── theme.py                 # Charcoal monochrome design tokens
-├── tests/
-│   ├── conftest.py                      # Shared test fixtures and in-memory DB
-│   ├── test_audit.py                    # Parser, validator, and report tests
-│   ├── test_budget.py                   # Ledger transactions and limit tests
-│   ├── test_remediation.py              # Remediation rules and immutability tests
-│   └── test_tui.py                      # Terminal UI panel and chart tests
-├── .gitignore                           # Excludes env, keys, data, reports, DBs
-├── pyproject.toml                       # Build configuration and CLI scripts
-├── uv.lock                              # Deterministic dependency lockfile
-└── README.md                            # Project documentation (this file)
-```
+- [x] **Phase 0:** discovery and architecture
+- [x] **Phase 1:** KB audit, remediation, budget ledger, model catalog, TUI
+- [ ] **Phase 2:** evaluation schemas, confidentiality gate, train/dev/test split, n-gram leakage detector
+- [ ] **Phase 3:** OpenRouter provider with retry/backoff, secret scrubbing, dry-run mode, model comparison
+- [ ] **Phase 4:** redacted Langfuse trace ingestion and failure classification (routing / retrieval / generation / KB)
+- [ ] **Phase 5:** LoRA / QLoRA fine-tuning feasibility and GPU sizing
+- [ ] **Phase 6:** vLLM benchmarks: TTFT, throughput, KV-cache pressure at 1 / 5 / 10 / 25 concurrent users
+- [ ] **Phase 7:** research dashboard with latency-vs-quality frontiers
+
+Full detail: [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
 
 ---
 
-## Development & Verification
-
-Run the automated test suite locally:
+## Development
 
 ```bash
-# Run all tests using uv
-uv run pytest
-
-# Run with verbose output and test names
-uv run pytest -v
-
-# Run a specific test module
+uv run pytest            # run everything
+uv run pytest -v         # verbose
 uv run pytest tests/test_audit.py
-uv run pytest tests/test_tui.py
 ```
 
-All 37 unit tests run in less than 0.3 seconds against an in-memory SQLite database without network dependencies.
+> [!IMPORTANT]
+> The university knowledge-base files are confidential and git-ignored. Tests that hash or remediate those exact files (`test_remediation_engine_dry_run_preserves_source_hash`, `test_remediation_cli_command`, `test_health_checks_live`) need them in the repo root and will fail without them. Everything else runs offline against an in-memory database.
+
+### Contributing
+
+Issues and PRs are welcome, especially for the Phase 2 leakage detector and the validator heuristics. Please:
+
+1. Open an issue before large changes.
+2. Add tests for new validators or remediation rules.
+3. Never commit data from the real knowledge base.
 
 ---
 
-## Documentation Links
+## Documentation
 
-- [System Architecture](docs/ARCHITECTURE.md) — Architectural design, data flows, and security constraints.
-- [Implementation Plan](docs/IMPLEMENTATION_PLAN.md) — Step-by-step phased roadmap, acceptance criteria, and milestones.
-- [Project Map](docs/PROJECT_MAP.md) — Workspace inventory, data quirks, and counting methodology.
+| Doc | What's inside |
+|---|---|
+| [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design, data flow, security boundaries |
+| [`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | Phases, acceptance criteria, milestones |
+| [`PROJECT_MAP.md`](docs/PROJECT_MAP.md) | Workspace inventory, data quirks, counting method |
 
 ---
 
-## License & University Context
+## License & context
 
-This workbench is an internal research tool developed for evaluation, auditing, and optimization of the admissions language model systems at Management and Science University (MSU). 
-
-Original source knowledge-base documents and university data remain the proprietary property of MSU. Open-source licensing for workbench tooling and evaluation harnesses is under review.
+An internal research tool for evaluating and optimizing the MSU admissions language-model system. Source knowledge-base documents remain the property of MSU. Open-source licensing for the tooling is under review.
