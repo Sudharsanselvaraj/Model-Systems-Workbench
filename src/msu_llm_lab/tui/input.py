@@ -16,15 +16,21 @@ class KeyReader:
         """Reads a single key or key sequence.
         
         Returns:
-            Key identifier like 'UP', 'DOWN', 'ENTER', 'ESC', 'q', '1', or EOF.
+            Key identifier like 'UP', 'DOWN', 'LEFT', 'RIGHT', 'ENTER', 'ESC',
+            'BACKSPACE', 'TAB', 'SHIFT_TAB', single characters, or 'EOF'.
         """
         if not self.is_tty:
             # Fallback for non-interactive environments, piped input, and automated tests
             line = sys.stdin.readline()
             if not line:
                 return "EOF"
-            token = line.strip().upper()
-            return token if token else "ENTER"
+            raw = line.rstrip("\r\n")
+            if not raw:
+                return "ENTER"
+            upper = raw.upper()
+            if upper in ("UP", "DOWN", "LEFT", "RIGHT", "ENTER", "ESC", "BACKSPACE", "TAB", "SHIFT_TAB", "EOF"):
+                return upper
+            return raw
 
         # Interactive POSIX terminal input
         import termios
@@ -42,7 +48,7 @@ class KeyReader:
 
             ch = sys.stdin.read(1)
 
-            # Handle Escape sequences (arrow keys)
+            # Handle Escape sequences
             if ch == "\x1b":
                 r, _, _ = select.select([sys.stdin], [], [], 0.05)
                 if r:
@@ -57,6 +63,24 @@ class KeyReader:
                             return "RIGHT"
                         elif ch3 == "D":
                             return "LEFT"
+                        elif ch3 == "Z":
+                            return "SHIFT_TAB"
+                        elif ch3 == "H":
+                            return "HOME"
+                        elif ch3 == "F":
+                            return "END"
+                        elif ch3 in ("1", "2", "3", "4", "5", "6"):
+                            # Extended sequences like [3~ (Delete)
+                            r_tilde, _, _ = select.select([sys.stdin], [], [], 0.02)
+                            if r_tilde:
+                                ch4 = sys.stdin.read(1)
+                                if ch4 == "~":
+                                    if ch3 == "3":
+                                        return "DELETE"
+                                    elif ch3 == "1":
+                                        return "HOME"
+                                    elif ch3 == "4":
+                                        return "END"
                     return "ESC"
                 return "ESC"
 
