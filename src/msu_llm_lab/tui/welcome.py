@@ -23,27 +23,21 @@ from msu_llm_lab.tui.input import KeyReader
 from msu_llm_lab.tui.theme import BG_DARK
 
 
-# High-resolution Braille artwork for the 3-plane ascending architecture with branching circuit path (width = 36)
+# Precise Braille artwork matching vector logo geometry (26 columns x 13 lines)
 LOGO_BRAILLE_STRIPPED: List[str] = [
-    "                            ⣷⣤⣀",
-    "                          ⣿⣿⣿⣿⣶⣤⣀",
-    "            ⣶⣤⣀         ⣿⣿⣿⣿⣿⣿⣿⣿⣶⣤⣀",
-    "            ⣿⣿⣿⣿⣶⣤⡀     ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "⣤⣄⡀         ⣿⣿⣿⣿⣿⣿⣿⣷⣦⣄⡀ ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "⣿⣿⣿⣷⣦⣄⡀     ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇ ⣿⣿⣿⣿⠉⠉⠉⢹⣿⣿⣿⡇",
-    "⣿⣿⣿⣿⣿⣿⣿⣷⣦⣀  ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇ ⣿⣿⣿⠟   ⢸⣿⣿⣿⡇",
-    "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ ⣿⣿⣿⣿⣿⣿⠟⠛⠛⠛⠃ ⠛⠛⠁⣠⣴⣿⣿⣿⣿⣿⣿⡇",
-    "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ ⣿⣿⣿⣿⠟⠁⣠⣶⣶⣶⣶⣶⣶⣶⣾⣿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "⣿⣿⣿⠛⠛⠛⢿⣿⣿⣿⣿ ⠿⠿⠋⠁⣠⣾⣿⣿⣿⣿⡇ ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "⣿⣿⣿   ⢈⣉⣉⣉⣁ ⣀⣀⣀⠈⠻⣿⣿⣿⣿⣿⡇ ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "⣿⣿⣿⣶⣶⣶⣾⣿⣿⣿⣿ ⣿⣿⣿⣷⣄⠈⠻⠿⠿⠿⠷⠶⠿⠿⢿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ ⣿⣿⣿⣿⣿⣷⣤⣤⣤⣤⡄ ⣤⣤⡀⠙⢿⣿⣿⣿⣿⣿⣿⡇",
-    "⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿ ⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇ ⣿⣿⣿⣦   ⢸⣿⣿⣿⡇",
-    "⠛⠿⣿⣿⣿⣿⣿⣿⣿⣿⣿ ⠛⠿⣿⣿⣿⣿⣿⣿⣿⣿⡇ ⣿⣿⣿⣿⣀⣀⣀⣸⣿⣿⣿⡇",
-    "   ⠉⠛⠿⣿⣿⣿⣿⣿   ⠈⠙⠻⢿⣿⣿⣿⣿⡇ ⢿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "       ⠉⠛⠿⣿       ⠈⠙⠻⢿⡇  ⠈⠛⠿⣿⣿⣿⣿⣿⣿⣿⡇",
-    "                             ⠉⠛⠿⣿⣿⣿⡇",
-    "                                 ⠉⠻⠇",
+    "                 ⢸⣶⣤⣀",
+    "        ⢠⣄⡀      ⢸⣿⣿⣿⣿⣶⣤⣀",
+    "        ⢸⣿⣿⣷⣦⣄⡀  ⢸⣿⣿⣿⣿⣿⣿⣿⣿",
+    "⣷⣦⣤⣀    ⢸⣿⣿⣿⣿⣿⣿⣷⡆⢸⣿⣿⡿⠿⠻⣿⣿⣿",
+    "⣿⣿⣿⣿⣿⣶⣤⣀⢸⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⡿⠃  ⣿⣿⣿",
+    "⣿⣿⣿⣿⣿⣿⣿⣿⢸⣿⣿⣿⠟⢉⣉⣉⣀⣈⣉⣠⣾⣿⣿⣿⣿⣿",
+    "⣿⣿⠛⠛⢻⣿⣿⣿⠘⠿⠛⢁⣴⣿⣿⣿⡇⢹⣿⣿⣿⣿⣿⣿⣿⣿",
+    "⣿⣿⣀⣀⣠⣤⣤⣤⢠⣤⣤⡈⠻⣿⣿⣿⣇⣸⣿⣿⣿⣿⣿⣿⣿⣿",
+    "⣿⣿⣿⣿⣿⣿⣿⣿⢸⣿⣿⣿⣦⣄⣀⣀⡀⢀⣀⠙⢿⣿⣿⣿⣿⣿",
+    "⣿⣿⣿⣿⣿⣿⣿⣿⢸⣿⣿⣿⣿⣿⣿⣿⡇⢸⣿⣷⡄  ⣿⣿⣿",
+    "⠈⠙⠻⠿⣿⣿⣿⣿ ⠈⠙⠻⢿⣿⣿⣿⡇⢸⣿⣿⣷⣶⣶⣿⣿⣿",
+    "     ⠉⠛⠿     ⠈⠙⠻⠇ ⠈⠙⠻⢿⣿⣿⣿⣿",
+    "                      ⠈⠙⠻⢿",
 ]
 
 MENU_ITEMS: List[Tuple[str, str, Optional[str]]] = [
@@ -72,17 +66,17 @@ class WelcomeScreen:
         if clear and self.key_reader.is_tty:
             self.console.clear()
 
-        # Determine terminal and content width
+        # Determine terminal and content width matching compact OpenSRE proportion
         term_cols, _ = shutil.get_terminal_size((100, 30))
         if self.console.width:
             term_cols = max(term_cols, self.console.width)
-        content_width = min(max(76, term_cols - 4), 94)
+        content_width = min(max(74, term_cols - 4), 88)
 
         container = Table.grid(padding=(0, 0))
         container.add_column("main", width=content_width)
 
-        # 1. Centered Braille Logo
-        logo_pad = max(0, (content_width - 36) // 2)
+        # 1. Centered Braille Logo (26 cols wide, matching OpenSRE)
+        logo_pad = max(0, (content_width - 26) // 2)
         for line in LOGO_BRAILLE_STRIPPED:
             container.add_row(Text.from_markup(f"[bold #c4b5fd]{' ' * logo_pad}{line}[/]"))
 
