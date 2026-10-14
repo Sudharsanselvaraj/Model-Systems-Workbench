@@ -14,6 +14,7 @@ from msu_llm_lab.models.catalog import ModelCandidate
 from msu_llm_lab.tui.health import HealthCheckItem
 from msu_llm_lab.tui.telemetry import SystemTelemetry, InferenceTelemetry, LogBuffer
 from msu_llm_lab.tui.theme import (
+    BG_DARK,
     BORDER_CHARCOAL,
     BORDER_TEAL,
     BORDER_FOCUSED,
@@ -25,6 +26,7 @@ from msu_llm_lab.tui.theme import (
     COLOR_SUCCESS,
     COLOR_WARNING,
     COLOR_ERROR,
+    STYLE_PANEL,
     STYLE_ROW_SELECTED,
     render_sparkline,
     render_2row_histogram,
@@ -46,6 +48,7 @@ NAV_ITEMS = [
 def build_top_header() -> Table:
     """Builds the single-line restrained top header bar matching charcoal reference."""
     header = Table.grid(expand=True)
+    header.style = f"{TEXT_PRIMARY} on {BG_DARK}"
     header.add_column("left", justify="left", width=38, no_wrap=True)
     header.add_column("center", justify="center", ratio=1, no_wrap=True)
     header.add_column("right", justify="right", width=26, no_wrap=True)
@@ -110,6 +113,7 @@ def build_navigation_panel(active_index: int, is_focused: bool) -> Panel:
         title=f"[{TEXT_PRIMARY}]NAVIGATION[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -199,6 +203,7 @@ def build_system_resources_panel(telemetry: SystemTelemetry) -> Panel:
         title=f"[{TEXT_PRIMARY}]SYSTEM RESOURCES (LOCAL)[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_CHARCOAL,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -233,6 +238,7 @@ def build_request_metrics_panel(telemetry: InferenceTelemetry) -> Panel:
         title=f"[{TEXT_PRIMARY}]{title_str}[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_CHARCOAL,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -268,6 +274,7 @@ def build_inference_status_panel(status: BudgetStatus) -> Panel:
         title=f"[{TEXT_PRIMARY}]INFERENCE STATUS[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_CHARCOAL,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -415,6 +422,7 @@ def build_model_catalogue_panel(
         title=f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -457,6 +465,7 @@ def build_budget_main_panel(status: BudgetStatus, is_focused: bool) -> Panel:
         title=f"[{TEXT_PRIMARY}]BUDGET & USAGE LEDGER[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -506,6 +515,7 @@ def build_dataset_validation_panel(is_focused: bool) -> Panel:
         title=f"[{TEXT_PRIMARY}]DATASET VALIDATION & REMEDIATION PIPELINE[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -526,6 +536,7 @@ def build_roadmap_panel(title_str: str, step_str: str, items: List[str], is_focu
         title=f"[{TEXT_PRIMARY}]{title_str}[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
+        style=STYLE_PANEL,
         padding=(1, 2),
     )
 
@@ -548,6 +559,7 @@ def build_health_main_panel(health_items: List[HealthCheckItem], is_focused: boo
         title=f"[{TEXT_PRIMARY}]PROJECT HEALTH DIAGNOSTICS[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -576,6 +588,7 @@ def build_settings_main_panel(is_focused: bool) -> Panel:
         title=f"[{TEXT_PRIMARY}]SETTINGS & CONFIGURATION[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
+        style=STYLE_PANEL,
         padding=(1, 2),
     )
 
@@ -619,6 +632,7 @@ def build_help_main_panel() -> Panel:
         title=f"[{TEXT_PRIMARY}]KEYBOARD SHORTCUTS & COMMAND CHEATSHEET[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_FOCUSED,
+        style=STYLE_PANEL,
         padding=(1, 2),
     )
 
@@ -645,6 +659,7 @@ def build_recent_logs_panel(log_buffer: LogBuffer) -> Panel:
         title=f"[{TEXT_PRIMARY}]RECENT LOGS[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_CHARCOAL,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -712,6 +727,7 @@ def build_budget_usage_bottom_panel(status: BudgetStatus) -> Panel:
         title=f"[{TEXT_PRIMARY}]BUDGET USAGE[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_CHARCOAL,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -733,6 +749,7 @@ def build_datasets_bottom_panel() -> Panel:
         title=f"[{TEXT_PRIMARY}]DATASETS[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_CHARCOAL,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -766,6 +783,7 @@ def build_command_bar(
     return Panel(
         line,
         border_style=BORDER_FOCUSED if mode in ("COMMAND", "SEARCH") else BORDER_CHARCOAL,
+        style=STYLE_PANEL,
         padding=(0, 1),
     )
 
@@ -773,6 +791,7 @@ def build_command_bar(
 def build_footer_bar(status: BudgetStatus) -> Table:
     """Builds the bottom-most shortcuts and status strip."""
     grid = Table.grid(expand=True)
+    grid.style = f"{TEXT_PRIMARY} on {BG_DARK}"
     grid.add_column("left", justify="left", ratio=6)
     grid.add_column("right", justify="right", ratio=4)
 
