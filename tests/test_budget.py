@@ -193,9 +193,9 @@ def test_model_catalog_seeding_and_unverified_labels(test_db: DatabaseManager):
         assert model.input_price_per_1m_usd > Decimal("0.00")
         assert model.output_price_per_1m_usd > Decimal("0.00")
 
-    # Verify Gemini Flash, Claude Haiku, GPT-6 Luna, Qwen3-8B, Qwen3-14B exist
+    # Verify Gemini 3.5 Flash Lite, Claude Haiku, GPT-6 Luna, Qwen3-8B, Qwen3-14B exist
     ids = [m.model_id for m in portfolio]
-    assert "google/gemini-flash-1.5" in ids
+    assert "google/gemini-3.5-flash-lite" in ids
     assert "anthropic/claude-haiku-5.5" in ids
     assert "openai/gpt-6-luna" in ids
     assert "qwen/qwen3-8b" in ids
@@ -219,5 +219,5 @@ def test_cli_models_list_output():
     assert "Candidate Portfolio" in result.stdout
     assert "UNVERIFIED" in result.stdout
     assert "NOT yet been validated against OpenRouter live API" in result.stdout
-    assert "google/gemini-flash-1.5" in result.stdout
+    assert "google/gemini-3.5-flash-lite" in result.stdout
     assert "qwen/qwen3-8b" in result.stdout
