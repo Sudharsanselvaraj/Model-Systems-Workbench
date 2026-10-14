@@ -262,6 +262,13 @@ class WorkbenchTUI:
 
         from rich.live import Live
 
+        # Dynamic terminal background set to deep matte charcoal (#141414) on supported emulators
+        try:
+            sys.stdout.write("\033]11;#141414\007")
+            sys.stdout.flush()
+        except Exception:
+            pass
+
         try:
             with Live(
                 self.build_layout(),
@@ -276,6 +283,12 @@ class WorkbenchTUI:
         except KeyboardInterrupt:
             pass
         finally:
+            try:
+                # Restore original terminal window background
+                sys.stdout.write("\033]111\007")
+                sys.stdout.flush()
+            except Exception:
+                pass
             self.console.print("[dim]Exited MSU LLM Inference Workbench.[/dim]")
 
     def handle_key(self, key: str) -> None:
