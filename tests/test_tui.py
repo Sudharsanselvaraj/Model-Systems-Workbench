@@ -1,4 +1,4 @@
-"""Unit tests for the interactive terminal UI, navigation, health diagnostics, and CLI invocation."""
+"""Unit tests for the btop-inspired terminal user interface, telemetry, and diagnostics."""
 
 import io
 from decimal import Decimal
@@ -7,17 +7,38 @@ from typer.testing import CliRunner
 
 from msu_llm_lab.cli import app
 from msu_llm_lab.core.budget import BudgetStatus
-from msu_llm_lab.models.catalog import ModelCandidate, get_portfolio
-from msu_llm_lab.tui.app import WorkbenchTUI, ScreenState
+from msu_llm_lab.models.catalog import get_portfolio
+from msu_llm_lab.tui.app import WorkbenchTUI, InputMode
 from msu_llm_lab.tui.health import run_system_health_checks
 from msu_llm_lab.tui.input import KeyReader
+from msu_llm_lab.tui.telemetry import SystemTelemetry, InferenceTelemetry, LogBuffer
+from msu_llm_lab.tui.theme import render_sparkline
 from msu_llm_lab.tui.screens import (
-    render_welcome_screen,
-    render_model_list_screen,
-    render_model_detail_screen,
-    render_budget_screen,
-    render_health_screen,
-    render_unimplemented_screen,
+    build_top_header,
+    build_navigation_panel,
+    build_system_and_metrics_panel,
+    build_inference_status_panel,
+    build_model_catalogue_panel,
+    build_budget_main_panel,
+    build_roadmap_panel,
+    build_health_main_panel,
+    build_settings_main_panel,
+    build_help_main_panel,
+    build_recent_logs_panel,
+    build_budget_usage_bottom_panel,
+    build_datasets_bottom_panel,
+    build_command_bar,
+    build_footer_bar,
+    # Compatibility wrappers
+    build_header_panel,
+    build_models_panel,
+    build_budget_panel,
+    build_dataset_panel,
+    build_eval_panel,
+    build_traces_panel,
+    build_health_panel,
+    build_help_panel,
+    build_status_bar,
 )
 
 runner = CliRunner()
@@ -28,33 +49,84 @@ def test_health_checks_live():
     items = run_system_health_checks()
     comp_map = {item.component: item for item in items}
 
-    # Python version check
     assert "Python Runtime" in comp_map
     assert comp_map["Python Runtime"].status == "PASS"
 
-    # Database check
     assert "SQLite Database" in comp_map
     assert comp_map["SQLite Database"].status == "PASS"
 
-    # Audit subsystem check
     assert "Audit Subsystem" in comp_map
     assert comp_map["Audit Subsystem"].status == "PASS"
 
-    # Source knowledge bases immutability check
     assert "MSU General KB" in comp_map
     assert comp_map["MSU General KB"].status == "PASS"
     assert "MSU Programmes KB" in comp_map
     assert comp_map["MSU Programmes KB"].status == "PASS"
 
 
+def test_system_telemetry_sampling():
+    """Verify local hardware telemetry samples without error or network calls."""
+    sys_t = SystemTelemetry(history_len=10)
+    sys_t.sample()
+    cpu_pct, cpu_detail, cpu_hist = sys_t.get_cpu_info()
+    assert 0.0 <= cpu_pct <= 100.0
+    assert "cores" in cpu_detail
+    assert len(cpu_hist) >= 1
+
+    mem_pct, mem_detail, mem_hist = sys_t.get_mem_info()
+    assert 0.0 <= mem_pct <= 100.0
+    assert "GB" in mem_detail
+    assert len(mem_hist) >= 1
+
+    disk_pct, disk_detail, disk_hist = sys_t.get_disk_info()
+    assert 0.0 <= disk_pct <= 100.0
+    assert "GB" in disk_detail
+    assert len(disk_hist) >= 1
+
+
+def test_render_sparkline():
+    """Verify sparkline rendering generates correct Unicode block glyphs."""
+    data = [0.0, 25.0, 50.0, 75.0, 100.0]
+    spark = render_sparkline(data, 0.0, 100.0, length=5)
+    assert len(spark) == 5
+    assert spark[0] == " "
+    assert spark[-1] == "█"
+
+    # Clamped bounds
+    clamped = render_sparkline([150.0], 0.0, 100.0, length=1)
+    assert clamped == "█"
+
+    # Empty history returns baseline dashes
+    empty_spark = render_sparkline([], 0.0, 100.0, length=4)
+    assert empty_spark == "────"
+
+
+
+def test_log_buffer_rolling_history():
+    """Verify LogBuffer appends messages and truncates at max_size."""
+    buf = LogBuffer(max_size=5)
+    for i in range(10):
+        buf.add("INFO", f"Message {i}")
+    recent = buf.get_recent(5)
+    assert len(recent) == 5
+    assert recent[-1][1] == "INFO"
+    assert recent[-1][2] == "Message 9"
+
+
 def test_key_reader_non_interactive(monkeypatch):
     """Verify KeyReader behavior in non-interactive piped/mocked input."""
-    # Test reading a single command
+    # Test reading single token
     mock_stdin = io.StringIO("q\n")
     monkeypatch.setattr("sys.stdin", mock_stdin)
     reader = KeyReader()
     assert reader.is_tty is False
-    assert reader.read_key() == "Q"
+    assert reader.read_key() == "q"
+
+    # Test reading command string
+    mock_cmd = io.StringIO(":models\n")
+    monkeypatch.setattr("sys.stdin", mock_cmd)
+    reader_cmd = KeyReader()
+    assert reader_cmd.read_key() == ":models"
 
     # Test reading EOF
     mock_empty = io.StringIO("")
@@ -63,36 +135,38 @@ def test_key_reader_non_interactive(monkeypatch):
     assert reader_empty.read_key() == "EOF"
 
 
-def test_screens_rendering_outputs():
-    """Verify all Rich TUI screens render cleanly without formatting exceptions."""
-    console = Console(file=io.StringIO(), force_terminal=True, width=120)
+def test_panel_renderers():
+    """Verify all Rich TUI panels render cleanly without exceptions."""
+    console = Console(file=io.StringIO(), force_terminal=False, width=120)
 
-    # 1. Welcome screen
-    render_welcome_screen(console, selected_index=0)
-    out_welcome = console.file.getvalue()
-    assert "MSU LLM INFERENCE WORKBENCH" in out_welcome
-    assert "Model Catalogue" in out_welcome
-    assert "Budget & Usage" in out_welcome
-    assert "NOT IMPLEMENTED" in out_welcome
+    # 1. Header panel
+    header = build_top_header()
+    console.print(header)
+    assert "MSU" in console.file.getvalue()
+    assert "LLM INFERENCE WORKBENCH" in console.file.getvalue()
 
-    # 2. Model list screen
+    # 2. Navigation panel
+    console.file = io.StringIO()
+    nav = build_navigation_panel(active_index=0, is_focused=True)
+    console.print(nav)
+    out_nav = console.file.getvalue()
+    assert "Model Catalogue" in out_nav
+    assert "Budget & Usage" in out_nav
+
+    # 3. Models panel
     candidates = get_portfolio()
     console.file = io.StringIO()
-    render_model_list_screen(console, candidates, selected_index=0)
+    models_panel = build_model_catalogue_panel(
+        candidates, selected_index=0, search_query="", is_focused=True
+    )
+    console.print(models_panel)
     out_models = console.file.getvalue()
-    assert "Candidate Model Portfolio" in out_models
-    assert "UNVERIFIED_CATALOG_ENTRY" in out_models
+    assert "MODEL CATALOGUE" in out_models
     assert "google/gemini-flash-1.5" in out_models
+    assert "UNVERIFIED" in out_models
+    assert "live provider" in out_models
 
-    # 3. Model detail inspector
-    console.file = io.StringIO()
-    render_model_detail_screen(console, candidates[0])
-    out_detail = console.file.getvalue()
-    assert "Model Inspector:" in out_detail
-    assert "INFERENCE LOCKED / EVALUATION SAFEGUARD" in out_detail
-    assert "Selecting a model does NOT initiate API calls" in out_detail
-
-    # 4. Budget screen
+    # 4. Budget panel
     fake_status = BudgetStatus(
         total_ceiling_usd=Decimal("10.00"),
         cumulative_spend_usd=Decimal("0.00"),
@@ -106,50 +180,205 @@ def test_screens_rendering_outputs():
         is_total_exhausted=False,
     )
     console.file = io.StringIO()
-    render_budget_screen(console, fake_status)
+    budget_panel = build_budget_main_panel(fake_status, is_focused=True)
+    console.print(budget_panel)
     out_budget = console.file.getvalue()
-    assert "Local Budget Ledger" in out_budget
-    assert "Initial Pilot Budget" in out_budget
-    assert "NOT provider-enforced account limits" in out_budget
+    assert "BUDGET & USAGE LEDGER" in out_budget
+    assert "Total Experiment Ceiling" in out_budget
+    assert "provider-enforced" in out_budget
 
-    # 5. Health screen
+    # 5. Roadmap panels
+    console.file = io.StringIO()
+    console.print(build_dataset_panel(is_focused=False))
+    console.print(build_eval_panel(is_focused=False))
+    console.print(build_traces_panel(is_focused=False))
+    out_roadmap = console.file.getvalue()
+    assert "ROADMAP STEP 2" in out_roadmap
+    assert "ROADMAP STEP 4" in out_roadmap
+    assert "ROADMAP STEP 6" in out_roadmap
+
+    # 6. Health panel
     items = run_system_health_checks()
     console.file = io.StringIO()
-    render_health_screen(console, items)
-    out_health = console.file.getvalue()
-    assert "Project Health & Diagnostics" in out_health
-    assert "PASS" in out_health
+    console.print(build_health_main_panel(items, is_focused=True))
+    assert "PROJECT HEALTH DIAGNOSTICS" in console.file.getvalue()
 
-    # 6. Unimplemented roadmap notice
+    # 7. Help panel
     console.file = io.StringIO()
-    render_unimplemented_screen(console, "Dataset Validation", "Step 2")
-    out_unimp = console.file.getvalue()
-    assert "Dataset Validation" in out_unimp
-    assert "Step 2" in out_unimp
+    console.print(build_help_main_panel())
+    assert "KEYBOARD SHORTCUTS" in console.file.getvalue()
+
+    # 8. Bottom Panels
+    console.file = io.StringIO()
+    console.print(build_recent_logs_panel(LogBuffer()))
+    console.print(build_budget_usage_bottom_panel(fake_status))
+    console.print(build_datasets_bottom_panel())
+    console.print(build_command_bar("NORMAL", "", 0, ""))
+    console.print(build_footer_bar(fake_status))
+    out_bottom = console.file.getvalue()
+    assert "RECENT LOGS" in out_bottom
+    assert "BUDGET USAGE" in out_bottom
+    assert "DATASETS" in out_bottom
+    assert "command >" in out_bottom
 
 
-def test_workbench_tui_headless_loop(monkeypatch):
-    """Verify WorkbenchTUI initializes and exits cleanly when invoked non-interactively."""
+def test_workbench_tui_btop_layout():
+    """Verify WorkbenchTUI instantiates the 5-tier btop layout shell."""
     out_buf = io.StringIO()
-    console = Console(file=out_buf, force_terminal=True, width=120)
-    mock_stdin = io.StringIO("")
-    monkeypatch.setattr("sys.stdin", mock_stdin)
-
+    console = Console(file=out_buf, force_terminal=False, width=120, height=36)
     app_tui = WorkbenchTUI(console=console)
-    assert not app_tui.key_reader.is_tty
-    app_tui.run()
-    assert "MSU LLM INFERENCE WORKBENCH" in out_buf.getvalue()
+    app_tui.refresh_data()
+
+    layout = app_tui.build_layout()
+    assert layout["header"] is not None
+    assert layout["top_row"]["nav"] is not None
+    assert layout["top_row"]["sys_metrics"] is not None
+    assert layout["top_row"]["inf_status"] is not None
+    assert layout["main"] is not None
+    assert layout["bottom_row"]["logs"] is not None
+    assert layout["bottom_row"]["budget_usage"] is not None
+    assert layout["bottom_row"]["datasets"] is not None
+    assert layout["footer"]["command"] is not None
+    assert layout["footer"]["status_line"] is not None
+
+    console.print(layout)
+    output = out_buf.getvalue()
+    assert "MSU" in output
+    assert "LLM INFERENCE WORKBENCH" in output
+    assert "NAVIGATION" in output
+    assert "SYSTEM RESOURCES" in output
+    assert "MODEL CATALOGUE" in output
+    assert "RECENT LOGS" in output
+    assert "BUDGET USAGE" in output
+
+
+def test_menu_navigation_and_pane_switching():
+    """Verify arrow keys and numbers navigate menu items without reinitializing."""
+    app_tui = WorkbenchTUI()
+    app_tui.refresh_data()
+    assert app_tui.nav_index == 0
+    assert app_tui.focused_pane == "NAV"
+
+    # Navigate down to Budget & Usage
+    app_tui.handle_key("DOWN")
+    assert app_tui.nav_index == 1
+
+    # Jump directly to Project Health using '6'
+    app_tui.handle_key("6")
+    assert app_tui.nav_index == 5
+    assert app_tui.focused_pane == "MAIN"
+
+    # Switch pane back to NAV using Tab
+    app_tui.handle_key("TAB")
+    assert app_tui.focused_pane == "NAV"
+
+    # Switch pane to MAIN using Enter
+    app_tui.handle_key("ENTER")
+    assert app_tui.focused_pane == "MAIN"
+
+
+def test_command_bar_editing_and_dispatch():
+    """Verify editable command bar text entry, backspace, cursor movement, and command execution."""
+    app_tui = WorkbenchTUI()
+    app_tui.refresh_data()
+
+    # 1. Activate command mode with ':'
+    app_tui.handle_key(":")
+    assert app_tui.input_mode == InputMode.COMMAND
+    assert app_tui.text_buffer == ""
+
+    # 2. Type 'budget'
+    for ch in "budget":
+        app_tui.handle_key(ch)
+    assert app_tui.text_buffer == "budget"
+    assert app_tui.cursor_pos == 6
+
+    # 3. Test Backspace
+    app_tui.handle_key("BACKSPACE")
+    assert app_tui.text_buffer == "budge"
+    assert app_tui.cursor_pos == 5
+
+    # 4. Re-add 't'
+    app_tui.handle_key("t")
+    assert app_tui.text_buffer == "budget"
+
+    # 5. Execute command with ENTER
+    app_tui.handle_key("ENTER")
+    assert app_tui.input_mode == InputMode.NORMAL
+    assert app_tui.nav_index == 1  # Switched to Budget & Usage!
+    assert "Budget & Usage" in app_tui.feedback_message
+
+    # 6. Test invalid command feedback
+    app_tui.handle_key(":")
+    for ch in "unknowncmd":
+        app_tui.handle_key(ch)
+    app_tui.handle_key("ENTER")
+    assert "Unknown command: ':unknowncmd'" in app_tui.feedback_message
+
+    # 7. Test Esc cancellation
+    app_tui.handle_key(":")
+    app_tui.handle_key("a")
+    app_tui.handle_key("ESC")
+    assert app_tui.input_mode == InputMode.NORMAL
+    assert app_tui.text_buffer == ""
+    assert app_tui.feedback_message == "Command cancelled"
+
+
+def test_search_filter_mode():
+    """Verify search filter mode (/prompt) filters candidate models in real time."""
+    app_tui = WorkbenchTUI()
+    app_tui.refresh_data()
+
+    # Activate search with '/'
+    app_tui.handle_key("/")
+    assert app_tui.input_mode == InputMode.SEARCH
+
+    # Type 'qwen'
+    for ch in "qwen":
+        app_tui.handle_key(ch)
+    assert app_tui.search_query == "qwen"
+
+    # Confirm filter with ENTER
+    app_tui.handle_key("ENTER")
+    assert app_tui.input_mode == InputMode.NORMAL
+    assert app_tui.search_query == "qwen"
+
+    # Clear filter with ESC
+    app_tui.handle_key("ESC")
+    assert app_tui.search_query == ""
+
+
+def test_help_modal_toggle():
+    """Verify '?' toggles the keyboard shortcut help overlay."""
+    app_tui = WorkbenchTUI()
+    app_tui.refresh_data()
+
+    app_tui.handle_key("?")
+    assert app_tui.input_mode == InputMode.HELP
+
+    app_tui.handle_key("ESC")
+    assert app_tui.input_mode == InputMode.NORMAL
+
+
+def test_graceful_handling_small_terminal():
+    """Verify small terminal dimensions render a notice without crashing."""
+    console = Console(file=io.StringIO(), force_terminal=True, width=40, height=10)
+    app_tui = WorkbenchTUI(console=console)
+    app_tui.refresh_data()
+
+    layout = app_tui.build_layout()
+    console.print(layout)
+    output = console.file.getvalue()
+    assert "Terminal size (40x10)" in output
 
 
 def test_cli_ui_and_interactive_invocation():
     """Verify CLI 'ui' and '--interactive' commands launch TUI without error."""
-    # Test 'msu-llm-lab ui'
-    res_ui = runner.invoke(app, ["ui"], env={"COLUMNS": "120"})
+    res_ui = runner.invoke(app, ["ui"], env={"COLUMNS": "120", "LINES": "36"})
     assert res_ui.exit_code == 0
-    assert "MSU LLM INFERENCE WORKBENCH" in res_ui.stdout
-    assert "Model Catalogue" in res_ui.stdout
+    assert "LLM INFERENCE WORKBENCH" in res_ui.stdout
+    assert "NAVIGATION" in res_ui.stdout
 
-    # Test 'msu-llm-lab --interactive'
-    res_inter = runner.invoke(app, ["--interactive"], env={"COLUMNS": "120"})
+    res_inter = runner.invoke(app, ["--interactive"], env={"COLUMNS": "120", "LINES": "36"})
     assert res_inter.exit_code == 0
-    assert "MSU LLM INFERENCE WORKBENCH" in res_inter.stdout
+    assert "LLM INFERENCE WORKBENCH" in res_inter.stdout
