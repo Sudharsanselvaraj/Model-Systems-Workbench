@@ -560,6 +560,131 @@ def compare_runs(
 
 
 # ---------------------------------------------------------------------------
+# Langfuse Trace Diagnostic Subcommand
+# ---------------------------------------------------------------------------
+
+
+@app.command("import-traces")
+def import_traces(
+    export_file: Path = typer.Argument(
+        ...,
+        help="Path to Langfuse JSON or CSV trace export file.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        "--output-dir",
+        "-o",
+        help="Directory to export diagnostic CSV and Markdown reports (e.g. reports/).",
+    ),
+    min_confidence: float = typer.Option(
+        0.50,
+        "--min-confidence",
+        "-c",
+        help="Minimum confidence threshold for candidate hypotheses.",
+    ),
+) -> None:
+    """Ingest redacted Langfuse RAG traces and diagnose candidate failure modes."""
+    from msu_llm_lab.traces.analyzer import TraceDiagnosticAnalyzer
+    from msu_llm_lab.traces.importer import TraceImporter
+    from msu_llm_lab.traces.models import FailureCategory
+    from msu_llm_lab.traces.reporter import DiagnosticReporter
+
+    console.print(Panel(
+        f"[bold cyan]Langfuse Trace Ingestion & Diagnostic Analyzer[/bold cyan]\n"
+        f"[dim]File:[/dim] [bold white]{export_file.name}[/bold white]\n"
+        f"[dim]Min Confidence:[/dim] [yellow]{min_confidence:.0%}[/yellow]",
+        expand=False,
+    ))
+
+    try:
+        traces = TraceImporter.load_from_file(export_file)
+    except Exception as e:
+        console.print(f"[bold red]Failed to load trace export:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    if not traces:
+        console.print("[yellow]No traces found in specified export file.[/yellow]")
+        return
+
+    analyzer = TraceDiagnosticAnalyzer(min_confidence=min_confidence)
+    report = analyzer.analyze_batch(traces)
+
+    # 1. Summary Table
+    table_sum = Table(title="Trace Batch Summary", show_header=True, header_style="bold magenta")
+    table_sum.add_column("Metric", style="dim")
+    table_sum.add_column("Value", justify="right", style="bold")
+    table_sum.add_column("Operational Context", style="italic")
+
+    table_sum.add_row("Total Ingested Traces", str(report.total_traces), "Successfully validated offline")
+    table_sum.add_row("Diagnosed Failures", str(report.diagnosed_failures), "Identified candidate failure hypotheses")
+    table_sum.add_row("Mean Latency", f"{report.mean_latency_ms:.1f} ms", "End-to-end trace turnaround")
+    table_sum.add_row("Total Token Footprint", f"{report.total_tokens:,}", "Aggregated prompt and completion tokens")
+
+    console.print(table_sum)
+
+    # 2. Failure Distribution Table
+    table_dist = Table(title="Failure Category Distribution", show_header=True, header_style="bold magenta")
+    table_dist.add_column("Failure Category", style="cyan")
+    table_dist.add_column("Candidate Count", justify="right")
+    table_dist.add_column("% Share", justify="right")
+    table_dist.add_column("Severity / Priority", justify="center")
+
+    for cat_name, count in report.category_counts.items():
+        pct = (count / max(1, report.total_traces)) * 100
+        if cat_name == FailureCategory.ROUTING_FAILURE.value:
+            prio = "[bold red]HIGH[/bold red]"
+        elif cat_name == FailureCategory.RETRIEVAL_FAILURE.value:
+            prio = "[bold yellow]HIGH[/bold yellow]"
+        elif cat_name == FailureCategory.SOURCE_KNOWLEDGE_FAILURE.value:
+            prio = "[bold magenta]KB DEFECT[/bold magenta]"
+        elif cat_name == FailureCategory.GENERATION_FAILURE.value:
+            prio = "[bold blue]MEDIUM[/bold blue]"
+        else:
+            prio = "[green]HEALTHY[/green]"
+
+        table_dist.add_row(cat_name, str(count), f"{pct:.1f}%", prio)
+
+    console.print(table_dist)
+
+    # 3. Detailed Diagnoses Table
+    table_diag = Table(title="Candidate Diagnostic Hypotheses", show_header=True, header_style="bold magenta")
+    table_diag.add_column("Trace ID", style="cyan", no_wrap=True)
+    table_diag.add_column("Category", style="bold")
+    table_diag.add_column("Conf.", justify="right")
+    table_diag.add_column("Hypothesis Snippet", style="white")
+    table_diag.add_column("Suggested Action", style="green")
+
+    for d in report.diagnoses:
+        if d.category != FailureCategory.NO_FAILURE_DETECTED:
+            table_diag.add_row(
+                d.trace_id,
+                d.category.value,
+                f"{d.confidence:.0%}",
+                d.hypothesis[:65] + "..." if len(d.hypothesis) > 65 else d.hypothesis,
+                d.suggested_action[:45] + "..." if len(d.suggested_action) > 45 else d.suggested_action,
+            )
+
+    if table_diag.rows:
+        console.print(table_diag)
+
+    # 4. Export reports if requested
+    if output_dir:
+        out_path = Path(output_dir)
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        csv_file = out_path / f"trace_diagnoses_{ts}.csv"
+        md_file = out_path / f"trace_diagnoses_{ts}.md"
+        DiagnosticReporter.export_csv(report, csv_file)
+        DiagnosticReporter.export_markdown(report, md_file)
+        console.print(f"\n[green]Diagnostic reports generated successfully:[/green]")
+        console.print(f"  • CSV: [bold]{csv_file}[/bold]")
+        console.print(f"  • Markdown: [bold]{md_file}[/bold]")
+
+
+# ---------------------------------------------------------------------------
 # Budget Subcommands
 # ---------------------------------------------------------------------------
 
