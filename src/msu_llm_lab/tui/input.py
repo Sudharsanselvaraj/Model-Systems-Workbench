@@ -42,59 +42,68 @@ class KeyReader:
             tty.setraw(fd)
             # Check timeout if specified
             if timeout is not None:
-                r, _, _ = select.select([sys.stdin], [], [], timeout)
+                r, _, _ = select.select([fd], [], [], timeout)
                 if not r:
                     return "TIMEOUT"
 
-            ch = sys.stdin.read(1)
-
-            # Handle Escape sequences
-            if ch == "\x1b":
-                r, _, _ = select.select([sys.stdin], [], [], 0.05)
-                if r:
-                    ch2 = sys.stdin.read(1)
-                    if ch2 == "[":
-                        ch3 = sys.stdin.read(1)
-                        if ch3 == "A":
-                            return "UP"
-                        elif ch3 == "B":
-                            return "DOWN"
-                        elif ch3 == "C":
-                            return "RIGHT"
-                        elif ch3 == "D":
-                            return "LEFT"
-                        elif ch3 == "Z":
-                            return "SHIFT_TAB"
-                        elif ch3 == "H":
-                            return "HOME"
-                        elif ch3 == "F":
-                            return "END"
-                        elif ch3 in ("1", "2", "3", "4", "5", "6"):
-                            # Extended sequences like [3~ (Delete)
-                            r_tilde, _, _ = select.select([sys.stdin], [], [], 0.02)
-                            if r_tilde:
-                                ch4 = sys.stdin.read(1)
-                                if ch4 == "~":
-                                    if ch3 == "3":
-                                        return "DELETE"
-                                    elif ch3 == "1":
-                                        return "HOME"
-                                    elif ch3 == "4":
-                                        return "END"
-                    return "ESC"
-                return "ESC"
-
-            elif ch in ("\r", "\n"):
-                return "ENTER"
-            elif ch == "\x7f" or ch == "\x08":
-                return "BACKSPACE"
-            elif ch == "\t":
-                return "TAB"
-            elif ch == "\x03":  # Ctrl+C
-                raise KeyboardInterrupt
-            elif ch == "\x04":  # Ctrl+D
+            first_bytes = os.read(fd, 1)
+            if not first_bytes:
                 return "EOF"
 
-            return ch
+            # Handle Escape sequences
+            if first_bytes == b"\x1b":
+                seq_bytes = b""
+                while True:
+                    r, _, _ = select.select([fd], [], [], 0.04)
+                    if r:
+                        chunk = os.read(fd, 32)
+                        if not chunk:
+                            break
+                        seq_bytes += chunk
+                        if seq_bytes.endswith((b"A", b"B", b"C", b"D", b"Z", b"H", b"F", b"~")):
+                            break
+                    else:
+                        break
+
+                if not seq_bytes:
+                    return "ESC"
+
+                seq = seq_bytes.decode("utf-8", errors="replace")
+
+                # Arrow keys (support both standard ANSI CSI \x1b[ and VT100/SS3 \x1bO)
+                if seq in ("[A", "OA", "[1;2A", "[1;5A"):
+                    return "UP"
+                elif seq in ("[B", "OB", "[1;2B", "[1;5B"):
+                    return "DOWN"
+                elif seq in ("[C", "OC", "[1;2C", "[1;5C"):
+                    return "RIGHT"
+                elif seq in ("[D", "OD", "[1;2D", "[1;5D"):
+                    return "LEFT"
+                elif seq in ("[Z",):
+                    return "SHIFT_TAB"
+                elif seq in ("[H", "OH", "[1~"):
+                    return "HOME"
+                elif seq in ("[F", "OF", "[4~"):
+                    return "END"
+                elif seq in ("[3~",):
+                    return "DELETE"
+                elif seq in ("[5~",):
+                    return "PAGE_UP"
+                elif seq in ("[6~",):
+                    return "PAGE_DOWN"
+                return "ESC"
+
+            elif first_bytes in (b"\r", b"\n"):
+                return "ENTER"
+            elif first_bytes in (b"\x7f", b"\x08"):
+                return "BACKSPACE"
+            elif first_bytes == b"\t":
+                return "TAB"
+            elif first_bytes == b"\x03":  # Ctrl+C
+                raise KeyboardInterrupt
+            elif first_bytes == b"\x04":  # Ctrl+D
+                return "EOF"
+
+            return first_bytes.decode("utf-8", errors="replace")
         finally:
             termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)

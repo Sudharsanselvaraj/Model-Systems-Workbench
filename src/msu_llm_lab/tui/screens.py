@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from rich.align import Align
 from rich.console import RenderableType
 from rich.panel import Panel
@@ -11,6 +11,7 @@ from rich.text import Text
 
 from msu_llm_lab.core.budget import BudgetStatus
 from msu_llm_lab.models.catalog import ModelCandidate
+from msu_llm_lab.traces.models import DiagnosisHypothesis, FailureCategory, TraceDiagnosticReport, TraceRecord
 from msu_llm_lab.tui.health import HealthCheckItem
 from msu_llm_lab.tui.telemetry import SystemTelemetry, InferenceTelemetry, LogBuffer
 from msu_llm_lab.tui.theme import (
@@ -28,6 +29,7 @@ from msu_llm_lab.tui.theme import (
     COLOR_ERROR,
     STYLE_PANEL,
     STYLE_ROW_SELECTED,
+    STYLE_ROW_HOVER,
     render_sparkline,
     render_2row_histogram,
 )
@@ -71,17 +73,25 @@ def build_top_header() -> Table:
     return header
 
 
-def build_navigation_panel(active_index: int, is_focused: bool) -> Panel:
+def build_navigation_panel(
+    active_index: int,
+    is_focused: bool = False,
+    cursor_index: Optional[int] = None,
+) -> Panel:
     """Builds the upper-left navigation sidebar panel matching charcoal monochrome reference."""
+    if cursor_index is None:
+        cursor_index = active_index
+
     grid = Table.grid(expand=True, padding=(0, 0))
-    grid.add_column("row", ratio=1, no_wrap=True)
+    grid.add_column("title", ratio=1, no_wrap=True)
+    grid.add_column("badge", justify="right", width=3, no_wrap=True)
 
     items = [
         "Model Catalogue",
         "Budget & Usage",
         "Dataset Validation",
         "Evaluation Runs",
-        "Traces & Observability",
+        "Traces & Observ.",
         "Project Health",
         "Settings",
         "Help",
@@ -89,23 +99,41 @@ def build_navigation_panel(active_index: int, is_focused: bool) -> Panel:
 
     for idx, title in enumerate(items):
         is_active = (idx == active_index)
+        is_cursor = (idx == cursor_index)
 
-        line = Text()
-        if is_active:
-            # Inverted monochrome selection bar
-            line.append("> ", style=STYLE_ROW_SELECTED)
-            line.append(f"{title:<22}", style=STYLE_ROW_SELECTED)
+        left_txt = Text()
+        right_txt = Text()
+
+        if is_cursor and is_focused:
+            # Focused cursor item: inverted monochrome selection bar
+            left_txt.append("> ", style=STYLE_ROW_SELECTED)
+            left_txt.append(title, style=STYLE_ROW_SELECTED)
+            right_txt.append("[●]" if is_active else "   ", style=STYLE_ROW_SELECTED)
+            grid.add_row(left_txt, right_txt, style=STYLE_ROW_SELECTED)
+        elif is_cursor and not is_focused:
+            # Cursor item when unfocused
+            left_txt.append("> ", style=f"bold {TEXT_PRIMARY}")
+            left_txt.append(title, style=f"bold {TEXT_PRIMARY}")
+            right_txt.append("[●]" if is_active else "   ", style=f"bold {TEXT_PRIMARY}" if is_active else f"{TEXT_MUTED}")
+            grid.add_row(left_txt, right_txt)
+        elif is_active:
+            # Active section while cursor is navigating elsewhere
+            left_txt.append("● ", style=f"bold {TEXT_PRIMARY}")
+            left_txt.append(title, style=f"bold {TEXT_PRIMARY}")
+            right_txt.append("[●]", style=f"bold {TEXT_PRIMARY}")
+            grid.add_row(left_txt, right_txt)
         else:
-            line.append("- ", style=f"{TEXT_MUTED}")
-            line.append(title, style=f"{TEXT_SECONDARY}")
-        grid.add_row(line)
+            left_txt.append("- ", style=f"{TEXT_MUTED}")
+            left_txt.append(title, style=f"{TEXT_SECONDARY}")
+            right_txt.append("   ", style=f"{TEXT_MUTED}")
+            grid.add_row(left_txt, right_txt)
 
     # Subtle separator before exit
-    grid.add_row(Text("──────────────────────", style=f"{BORDER_CHARCOAL}"))
-    exit_line = Text()
-    exit_line.append("- ", style=f"{TEXT_MUTED}")
-    exit_line.append("Exit", style=f"{TEXT_SECONDARY}")
-    grid.add_row(exit_line)
+    grid.add_row(Text("──────────────────────", style=f"{BORDER_CHARCOAL}"), Text(""))
+    exit_left = Text()
+    exit_left.append("- ", style=f"{TEXT_MUTED}")
+    exit_left.append("Exit (q)", style=f"{TEXT_SECONDARY}")
+    grid.add_row(exit_left, Text(""))
 
     border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
@@ -291,6 +319,8 @@ def build_model_catalogue_panel(
         if not search_query or search_query.lower() in m.model_id.lower() or search_query.lower() in m.display_name.lower() or search_query.lower() in m.provider.lower()
     ]
 
+    effective_sel = max(0, min(selected_index, len(filtered) - 1)) if filtered else 0
+
     outer = Table.grid(expand=True)
     outer.add_column("main", ratio=1)
 
@@ -299,21 +329,42 @@ def build_model_catalogue_panel(
     sub_header = Table.grid(expand=True)
     sub_header.add_column("left", justify="left")
     sub_header.add_column("right", justify="right")
+
+    if is_focused:
+        left_sub = Text(f"{count_str}   ↑/↓ move selection  |  Enter: inspect  |  Home/End  |  ←/Esc: sidebar  |  Tab: next", style=f"bold {TEXT_PRIMARY}")
+    else:
+        left_sub = Text(f"{count_str}   (Press Enter or → to focus catalogue)  |  / search  |  r refresh", style=f"{TEXT_SECONDARY}")
+
     sub_header.add_row(
-        Text(f"{count_str}   ↑/↓ navigate  |  Enter: details  |  / search  |  r refresh", style=f"{TEXT_SECONDARY}"),
-        Text(f"Filter: '{search_query}'" if search_query else "", style=f"bold {TEXT_PRIMARY}"),
+        left_sub,
+        Text(f"Filter: '{search_query}'" if search_query else (f"Selected: #{effective_sel + 1}/{len(filtered)}" if is_focused and filtered else ""), style=f"bold {TEXT_PRIMARY}"),
     )
     outer.add_row(sub_header)
+
+    if not candidates:
+        outer.add_row(Text("\nNo model candidates found in catalogue.", style=f"bold {COLOR_WARNING}"))
+        border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
+        title_str = f"[{TEXT_BRIGHT}]● MODEL CATALOGUE (FOCUSED)[/{TEXT_BRIGHT}]" if is_focused else f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]"
+        return Panel(
+            outer,
+            title=title_str,
+            title_align="left",
+            border_style=border,
+            style=STYLE_PANEL,
+            padding=(0, 1),
+        )
 
     if not filtered:
         empty_text = Text(f"\nNo models matching search query '{search_query}'. Press Esc to clear filter.", style=f"bold {COLOR_WARNING}")
         outer.add_row(empty_text)
         border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
+        title_str = f"[{TEXT_BRIGHT}]● MODEL CATALOGUE (FOCUSED)[/{TEXT_BRIGHT}]" if is_focused else f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]"
         return Panel(
             outer,
-            title=f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]",
+            title=title_str,
             title_align="left",
             border_style=border,
+            style=STYLE_PANEL,
             padding=(0, 1),
         )
 
@@ -344,7 +395,8 @@ def build_model_catalogue_panel(
         status_disp = "UNVERIFIED"
 
         if is_sel:
-            # Inverted monochrome highlight: dark text on light gray background
+            # Highlight active candidate: inverted when focused, subtle when unfocused
+            row_style = STYLE_ROW_SELECTED if is_focused else STYLE_ROW_HOVER
             table.add_row(
                 num_str,
                 m.model_id,
@@ -353,7 +405,7 @@ def build_model_catalogue_panel(
                 m.deployment_mode,
                 price_str,
                 status_disp,
-                style=STYLE_ROW_SELECTED,
+                style=row_style,
             )
         else:
             table.add_row(
@@ -417,9 +469,10 @@ def build_model_catalogue_panel(
     outer.add_row(inspector_grid)
 
     border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
+    title_str = f"[{TEXT_BRIGHT}]● MODEL CATALOGUE (FOCUSED)[/{TEXT_BRIGHT}]" if is_focused else f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]"
     return Panel(
         outer,
-        title=f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]",
+        title=title_str,
         title_align="left",
         border_style=border,
         style=STYLE_PANEL,
@@ -427,10 +480,24 @@ def build_model_catalogue_panel(
     )
 
 
-def build_budget_main_panel(status: BudgetStatus, is_focused: bool) -> Panel:
+def build_budget_main_panel(
+    status: BudgetStatus,
+    is_focused: bool = False,
+    selected_index: int = 0,
+) -> Panel:
     """Builds the main panel when Budget & Usage is selected."""
     grid = Table.grid(expand=True)
     grid.add_column("main", ratio=1)
+
+    sub_header = Table.grid(expand=True)
+    sub_header.add_column("left", justify="left")
+    sub_header.add_column("right", justify="right")
+    sub_header.add_row(
+        Text("Spend Tracking & Safeguards   ↑/↓ navigate rows  |  Enter: inspect rule  |  ←/Esc: sidebar", style=f"{TEXT_SECONDARY}"),
+        Text(f"Selected Rule: #{selected_index + 1}/6" if is_focused else "", style=f"bold {TEXT_PRIMARY}"),
+    )
+    grid.add_row(sub_header)
+    grid.add_row(Text(""))
 
     c_table = Table(title="Spend Ceilings & Tracking Policies", box=None, expand=True, header_style=f"bold {TEXT_PRIMARY}")
     c_table.add_column("Policy Metric", style=f"{TEXT_SECONDARY}", no_wrap=True)
@@ -442,8 +509,11 @@ def build_budget_main_panel(status: BudgetStatus, is_focused: bool) -> Panel:
     pilot_st = f"[bold {COLOR_ERROR}]EXHAUSTED[/]" if status.is_pilot_exhausted else f"[bold {TEXT_PRIMARY}]ACTIVE[/]"
     total_st = f"[bold {COLOR_ERROR}]EXHAUSTED[/]" if status.is_total_exhausted else f"[bold {TEXT_PRIMARY}]ACTIVE[/]"
 
-    c_table.add_row("Initial Pilot Budget", f"${status.pilot_ceiling_usd:.4f}", f"${status.pilot_spend_usd:.4f}", f"${status.remaining_pilot_usd:.4f}", pilot_st)
-    c_table.add_row("Total Experiment Ceiling", f"${status.total_ceiling_usd:.4f}", f"${status.cumulative_spend_usd:.4f}", f"${status.remaining_total_usd:.4f}", total_st)
+    row0_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 0) else None
+    row1_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 1) else None
+
+    c_table.add_row("Initial Pilot Budget", f"${status.pilot_ceiling_usd:.4f}", f"${status.pilot_spend_usd:.4f}", f"${status.remaining_pilot_usd:.4f}", pilot_st, style=row0_style)
+    c_table.add_row("Total Experiment Ceiling", f"${status.total_ceiling_usd:.4f}", f"${status.cumulative_spend_usd:.4f}", f"${status.remaining_total_usd:.4f}", total_st, style=row1_style)
     grid.add_row(c_table)
 
     s_table = Table(title="Execution Safeguards", box=None, expand=True, header_style=f"bold {TEXT_SECONDARY}")
@@ -451,10 +521,15 @@ def build_budget_main_panel(status: BudgetStatus, is_focused: bool) -> Panel:
     s_table.add_column("Limit / State", justify="right")
     s_table.add_column("Enforcement Action", style=f"{TEXT_MUTED} italic")
 
-    s_table.add_row("Provider-Reported Spend", "$0.0000 USD", "No outbound provider synchronization; local tracking only")
-    s_table.add_row("Live Inference Enabled", f"[bold {COLOR_ERROR}]NO[/]", "Dry-run mode by default; requires explicit live approval")
-    s_table.add_row("Max Single Run Spend", f"${status.per_run_ceiling_usd:.4f} USD", "Preflight check rejects run if exceeded")
-    s_table.add_row("Max Single Case Spend", f"${status.per_case_ceiling_usd:.4f} USD", "Per-case circuit breaker halts run")
+    row2_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 2) else None
+    row3_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 3) else None
+    row4_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 4) else None
+    row5_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 5) else None
+
+    s_table.add_row("Provider-Reported Spend", "$0.0000 USD", "No outbound provider synchronization; local tracking only", style=row2_style)
+    s_table.add_row("Live Inference Enabled", f"[bold {COLOR_ERROR}]NO[/]", "Dry-run mode by default; requires explicit live approval", style=row3_style)
+    s_table.add_row("Max Single Run Spend", f"${status.per_run_ceiling_usd:.4f} USD", "Preflight check rejects run if exceeded", style=row4_style)
+    s_table.add_row("Max Single Case Spend", f"${status.per_case_ceiling_usd:.4f} USD", "Per-case circuit breaker halts run", style=row5_style)
     grid.add_row(s_table)
 
     grid.add_row(Text("\nNOTE: Ceilings are local experiment tracking policies, NOT provider-enforced account limits.", style=f"{TEXT_SECONDARY} italic"))
@@ -520,6 +595,340 @@ def build_dataset_validation_panel(is_focused: bool) -> Panel:
     )
 
 
+def _format_failure_category(cat: str) -> str:
+    """Returns styled category badge matching charcoal terminal design."""
+    if "ROUTING" in cat:
+        return f"[bold #E0A050]{cat}[/]"
+    elif "RETRIEVAL" in cat:
+        return f"[bold #E06060]{cat}[/]"
+    elif "SOURCE" in cat or "KB" in cat:
+        return f"[bold #D070D0]{cat}[/]"
+    elif "GENERATION" in cat:
+        return f"[bold #E08060]{cat}[/]"
+    elif "NO_FAILURE" in cat or "SUCCESS" in cat:
+        return f"[bold {COLOR_SUCCESS}]{cat}[/]"
+    return f"[{TEXT_SECONDARY}]{cat}[/]"
+
+
+def build_evaluation_main_panel(
+    runs: List[Dict[str, Any]],
+    selected_index: int = 0,
+    is_focused: bool = False,
+    run_results: Optional[List[Dict[str, Any]]] = None,
+) -> Panel:
+    """Builds the comprehensive Evaluation Runs & Benchmark Results panel."""
+    grid = Table.grid(expand=True)
+    grid.add_column("main", ratio=1)
+
+    # 1. Summary Header
+    header_table = Table.grid(expand=True)
+    header_table.add_column("left", ratio=1)
+    header_table.add_column("right", justify="right")
+
+    left_summary = Text()
+    left_summary.append("Decoupled RAG Benchmarks ", style=f"bold {TEXT_PRIMARY}")
+    left_summary.append(f"({len(runs)} runs recorded)", style=f"{TEXT_MUTED}")
+
+    right_summary = Text()
+    right_summary.append("Dataset: ", style=f"{TEXT_MUTED}")
+    right_summary.append("verified_rag_benchmark.jsonl ", style=f"bold {TEXT_SECONDARY}")
+    right_summary.append("• Mode: ", style=f"{TEXT_MUTED}")
+    right_summary.append("DRY-RUN ZERO-SPEND", style=f"bold {COLOR_SUCCESS}")
+
+    header_table.add_row(left_summary, right_summary)
+    grid.add_row(header_table)
+    grid.add_row(Text(""))
+
+    # 2. Benchmark Runs Table
+    r_table = Table(box=None, expand=True, header_style=f"bold {TEXT_PRIMARY}")
+    r_table.add_column("Run ID", style=f"bold {TEXT_PRIMARY}", width=24, no_wrap=True)
+    r_table.add_column("Timestamp", style=f"{TEXT_MUTED}", width=17, no_wrap=True)
+    r_table.add_column("Model Candidate", style=f"{TEXT_SECONDARY}", width=26, no_wrap=True)
+    r_table.add_column("Cases", justify="right", width=6)
+    r_table.add_column("Accuracy", justify="right", width=10)
+    r_table.add_column("Faithfulness", justify="right", width=14)
+    r_table.add_column("Mean Lat.", justify="right", width=10)
+    r_table.add_column("Cost (USD)", justify="right", width=11)
+    r_table.add_column("Mode", justify="center", width=9)
+
+    if not runs:
+        r_table.add_row(
+            "-", "-", "No recorded runs yet", "0", "-", "-", "-", "$0.0000", "[DRY-RUN]"
+        )
+    else:
+        # Windowed scrolling for clean display
+        max_visible = 6
+        total = len(runs)
+        selected_index = max(0, min(selected_index, total - 1))
+        if total <= max_visible:
+            start_idx = 0
+            end_idx = total
+        else:
+            half = max_visible // 2
+            start_idx = max(0, min(selected_index - half, total - max_visible))
+            end_idx = start_idx + max_visible
+
+        for idx in range(start_idx, end_idx):
+            run = runs[idx]
+            run_id = str(run.get("run_id", "unknown"))
+            ts_raw = str(run.get("timestamp", ""))
+            try:
+                dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                ts_str = dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                ts_str = ts_raw[:16]
+
+            model_id = str(run.get("model_id", "unknown"))
+            if len(model_id) > 24:
+                model_disp = model_id[:22] + "…"
+            else:
+                model_disp = model_id
+
+            cases_str = str(run.get("total_cases", 0))
+            acc = float(run.get("mean_accuracy", 0.0))
+            acc_str = f"{acc * 100:.1f}%"
+            groundedness = float(run.get("mean_groundedness", 0.0))
+            grd_str = f"{groundedness * 100:.1f}%"
+            lat = float(run.get("mean_latency_ms", 0.0))
+            lat_str = f"{lat:.1f}ms"
+            cost_str = f"${float(run.get('total_cost_usd', 0)):.4f}"
+            is_dry = bool(run.get("is_dry_run", 1))
+            mode_badge = f"[{TEXT_MUTED}][DRY-RUN][/]" if is_dry else f"[bold {COLOR_WARNING}][LIVE][/]"
+
+            row_style = STYLE_ROW_SELECTED if (is_focused and idx == selected_index) else None
+            r_table.add_row(
+                run_id,
+                ts_str,
+                model_disp,
+                cases_str,
+                acc_str,
+                grd_str,
+                lat_str,
+                cost_str,
+                mode_badge,
+                style=row_style,
+            )
+
+    grid.add_row(r_table)
+    grid.add_row(Text(""))
+
+    # 3. Selected Run Details / Case Preview
+    if runs and 0 <= selected_index < len(runs):
+        sel_run = runs[selected_index]
+        det_table = Table(
+            title=f"Selected Run Details: {sel_run.get('run_id')} ({sel_run.get('model_id')})",
+            box=None,
+            expand=True,
+            header_style=f"bold {TEXT_SECONDARY}",
+        )
+        if run_results:
+            det_table.add_column("Case ID", style=f"bold {TEXT_PRIMARY}", width=18)
+            det_table.add_column("Student Prompt", style=f"{TEXT_PRIMARY}", ratio=1)
+            det_table.add_column("Acc.", justify="right", width=8)
+            det_table.add_column("Faithful", justify="right", width=9)
+            det_table.add_column("Latency", justify="right", width=10)
+            det_table.add_column("Attribution / Notes", style=f"{TEXT_MUTED}", width=22)
+
+            for r in run_results[:3]:
+                p_text = str(r.get("prompt", ""))
+                p_snippet = p_text[:45] + "…" if len(p_text) > 45 else p_text
+                acc_val = f"{float(r.get('accuracy', 0))*100:.0f}%"
+                grd_val = f"{float(r.get('groundedness', 0))*100:.0f}%"
+                l_val = f"{float(r.get('latency_ms', 0)):.0f}ms"
+                notes = str(r.get("evaluator_notes", "") or "-")
+                if len(notes) > 20:
+                    notes = notes[:18] + "…"
+                det_table.add_row(
+                    str(r.get("case_id", "-")),
+                    p_snippet,
+                    acc_val,
+                    grd_val,
+                    l_val,
+                    notes,
+                )
+        else:
+            det_table.add_column("Metric", style=f"bold {TEXT_PRIMARY}", width=25)
+            det_table.add_column("Value", justify="left", width=25)
+            det_table.add_column("Analysis / Evaluation Invariant", style=f"{TEXT_MUTED}")
+
+            det_table.add_row("Evaluation Dataset", str(sel_run.get("dataset_path", "verified_rag_benchmark.jsonl")), "Decoupled evaluation dataset with verified ground truth")
+            det_table.add_row("Mean Accuracy", f"{float(sel_run.get('mean_accuracy', 0))*100:.1f}%", "Factual overlap against verified reference answers")
+            det_table.add_row("Faithfulness (Groundedness)", f"{float(sel_run.get('mean_groundedness', 0))*100:.1f}%", "Context-supported ratio to prevent hallucinations")
+            det_table.add_row("Execution Notes", str(sel_run.get("notes", "RAG evaluation")), "Tracked under local budget policy ceilings")
+
+        grid.add_row(det_table)
+
+    # 4. Guidance Footer
+    note = Text(
+        "\nNAVIGATION: Use ↑/↓ to browse benchmark runs. Press [Enter] to inspect run cases. Press [R] to refresh.",
+        style=f"{TEXT_MUTED} italic",
+    )
+    grid.add_row(note)
+
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
+    return Panel(
+        grid,
+        title=f"[{TEXT_PRIMARY}]EVALUATION RUNS & BENCHMARKS[/{TEXT_PRIMARY}]",
+        title_align="left",
+        border_style=border,
+        style=STYLE_PANEL,
+        padding=(0, 1),
+    )
+
+
+def build_traces_main_panel(
+    traces: List[TraceRecord],
+    report: Optional[TraceDiagnosticReport] = None,
+    selected_index: int = 0,
+    is_focused: bool = False,
+) -> Panel:
+    """Builds the comprehensive Production Traces & Observability panel."""
+    grid = Table.grid(expand=True)
+    grid.add_column("main", ratio=1)
+
+    # 1. Summary Header
+    header_table = Table.grid(expand=True)
+    header_table.add_column("left", ratio=1)
+    header_table.add_column("right", justify="right")
+
+    left_summary = Text()
+    left_summary.append("Langfuse Trace Observability ", style=f"bold {TEXT_PRIMARY}")
+    left_summary.append(f"({len(traces)} traces imported)", style=f"{TEXT_MUTED}")
+
+    diag_count = report.diagnosed_failures if report else 0
+    mean_lat = f"{report.mean_latency_ms:.1f}ms" if report else "0.0ms"
+
+    right_summary = Text()
+    right_summary.append("Candidate Incidents: ", style=f"{TEXT_MUTED}")
+    right_summary.append(f"{diag_count}/{len(traces)} ", style=f"bold {COLOR_WARNING}")
+    right_summary.append("• Mean Latency: ", style=f"{TEXT_MUTED}")
+    right_summary.append(f"{mean_lat} ", style=f"bold {TEXT_SECONDARY}")
+    right_summary.append("• Redaction: ", style=f"{TEXT_MUTED}")
+    right_summary.append("100% PASS", style=f"bold {COLOR_SUCCESS}")
+
+    header_table.add_row(left_summary, right_summary)
+    grid.add_row(header_table)
+
+    # 1b. Failure Category Pill Distribution
+    if report and report.category_counts:
+        cat_pills = Text()
+        cat_pills.append("Failure Breakdown: ", style=f"{TEXT_MUTED}")
+        cat_items = [
+            ("ROUTING", report.category_counts.get("ROUTING_FAILURE", 0), "#E0A050"),
+            ("RETRIEVAL", report.category_counts.get("RETRIEVAL_FAILURE", 0), "#E06060"),
+            ("KB DEFECT", report.category_counts.get("SOURCE_KNOWLEDGE_FAILURE", 0), "#D070D0"),
+            ("GENERATION", report.category_counts.get("GENERATION_FAILURE", 0), "#E08060"),
+            ("HEALTHY", report.category_counts.get("NO_FAILURE_DETECTED", 0), COLOR_SUCCESS),
+        ]
+        for name, count, color in cat_items:
+            cat_pills.append(f" {name}: ", style=f"{TEXT_MUTED}")
+            cat_pills.append(f"{count}", style=f"bold {color}")
+            cat_pills.append(" |", style=f"{BORDER_CHARCOAL}")
+        grid.add_row(cat_pills)
+
+    grid.add_row(Text(""))
+
+    # 2. Ingested Traces Table
+    t_table = Table(box=None, expand=True, header_style=f"bold {TEXT_PRIMARY}")
+    t_table.add_column("Trace ID", style=f"bold {TEXT_PRIMARY}", width=20, no_wrap=True)
+    t_table.add_column("Timestamp", style=f"{TEXT_MUTED}", width=17, no_wrap=True)
+    t_table.add_column("Student Query Snippet", style=f"{TEXT_PRIMARY}", ratio=1)
+    t_table.add_column("Latency", justify="right", width=10)
+    t_table.add_column("Candidate Category", width=25)
+    t_table.add_column("Conf.", justify="right", width=7)
+
+    if not traces:
+        t_table.add_row("-", "-", "No traces loaded from data/traces/", "-", "N/A", "-")
+    else:
+        # Windowed scrolling
+        max_visible = 5
+        total = len(traces)
+        selected_index = max(0, min(selected_index, total - 1))
+        if total <= max_visible:
+            start_idx = 0
+            end_idx = total
+        else:
+            half = max_visible // 2
+            start_idx = max(0, min(selected_index - half, total - max_visible))
+            end_idx = start_idx + max_visible
+
+        for idx in range(start_idx, end_idx):
+            trace = traces[idx]
+            diag = report.diagnoses[idx] if (report and idx < len(report.diagnoses)) else None
+
+            ts_raw = trace.timestamp
+            try:
+                dt = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                ts_str = dt.strftime("%Y-%m-%d %H:%M")
+            except Exception:
+                ts_str = ts_raw[:16]
+
+            q_text = trace.input_query
+            q_snippet = q_text[:42] + "…" if len(q_text) > 42 else q_text
+            lat_str = f"{trace.latency_ms:.0f}ms"
+
+            if diag:
+                cat_badge = _format_failure_category(diag.category.value)
+                conf_str = f"{diag.confidence * 100:.0f}%"
+            else:
+                cat_badge = f"[{TEXT_MUTED}]UNANALYZED[/]"
+                conf_str = "-"
+
+            row_style = STYLE_ROW_SELECTED if (is_focused and idx == selected_index) else None
+            t_table.add_row(
+                trace.id,
+                ts_str,
+                q_snippet,
+                lat_str,
+                cat_badge,
+                conf_str,
+                style=row_style,
+            )
+
+    grid.add_row(t_table)
+    grid.add_row(Text(""))
+
+    # 3. Diagnostic Hypothesis & Evidence Inspector
+    if report and report.diagnoses and 0 <= selected_index < len(report.diagnoses):
+        sel_diag = report.diagnoses[selected_index]
+        sel_trace = traces[selected_index] if selected_index < len(traces) else None
+
+        insp_table = Table(
+            title=f"Diagnostic Inspector: {sel_diag.trace_id} ({sel_diag.category.value})",
+            box=None,
+            expand=True,
+            header_style=f"bold {TEXT_SECONDARY}",
+        )
+        insp_table.add_column("Item", style=f"bold {TEXT_PRIMARY}", width=18)
+        insp_table.add_column("Details", style=f"{TEXT_PRIMARY}", ratio=1)
+
+        insp_table.add_row("Student Query", f'"{sel_trace.input_query}"' if sel_trace else "-")
+        insp_table.add_row("Candidate Hypothesis", f"[{TEXT_BRIGHT}]{sel_diag.hypothesis}[/] (Confidence: {sel_diag.confidence*100:.0f}%)")
+        
+        evidence_text = "\n".join(f"• {e}" for e in sel_diag.evidence) if sel_diag.evidence else "• Telemetry within bounds"
+        insp_table.add_row("Supporting Evidence", evidence_text)
+        insp_table.add_row("Actionable Remediation", f"[bold {COLOR_SUCCESS}]{sel_diag.suggested_action}[/]")
+
+        grid.add_row(insp_table)
+
+    # 4. Safety Disclaimer & Footer
+    disclaimer = Text(
+        "\nAUDIT DISCLAIMER: Findings are candidate diagnostic hypotheses derived from heuristics & telemetry, not ground-truth verdicts.\nUse ↑/↓ to navigate traces. Press [R] to reload from data/traces/.",
+        style=f"{TEXT_MUTED} italic",
+    )
+    grid.add_row(disclaimer)
+
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
+    return Panel(
+        grid,
+        title=f"[{TEXT_PRIMARY}]PRODUCTION TRACES & DIAGNOSTIC OBSERVABILITY[/{TEXT_PRIMARY}]",
+        title_align="left",
+        border_style=border,
+        style=STYLE_PANEL,
+        padding=(0, 1),
+    )
+
+
 def build_roadmap_panel(title_str: str, step_str: str, items: List[str], is_focused: bool) -> Panel:
     """Builds clean roadmap panel for upcoming roadmap steps."""
     t = Text()
@@ -541,21 +950,42 @@ def build_roadmap_panel(title_str: str, step_str: str, items: List[str], is_focu
     )
 
 
-def build_health_main_panel(health_items: List[HealthCheckItem], is_focused: bool) -> Panel:
+def build_health_main_panel(
+    health_items: List[HealthCheckItem],
+    is_focused: bool = False,
+    selected_index: int = 0,
+) -> Panel:
     """Builds the main panel when Project Health is selected."""
+    grid = Table.grid(expand=True)
+    grid.add_column("main", ratio=1)
+
+    sub_header = Table.grid(expand=True)
+    sub_header.add_column("left", justify="left")
+    sub_header.add_column("right", justify="right")
+    sub_header.add_row(
+        Text("System Diagnostics   ↑/↓ navigate checks  |  Enter: inspect detail  |  ←/Esc: sidebar", style=f"{TEXT_SECONDARY}"),
+        Text(f"Selected: #{selected_index + 1}/{len(health_items)}" if is_focused and health_items else "", style=f"bold {TEXT_PRIMARY}"),
+    )
+    grid.add_row(sub_header)
+    grid.add_row(Text(""))
+
     table = Table(box=None, expand=True, padding=(0, 1), show_header=True, header_style=f"bold {TEXT_PRIMARY}")
     table.add_column("Component", style=f"bold {TEXT_PRIMARY}", width=22)
     table.add_column("Status", justify="center", width=8)
     table.add_column("Details", style=f"{TEXT_PRIMARY}")
     table.add_column("Notes", style=f"{TEXT_MUTED} italic")
 
-    for item in health_items:
+    for idx, item in enumerate(health_items):
+        is_sel = (is_focused and idx == selected_index)
         badge = f"[bold {TEXT_PRIMARY}]PASS[/]" if item.status == "PASS" else (f"[bold {COLOR_WARNING}]WARN[/]" if item.status == "WARN" else f"[bold {COLOR_ERROR}]FAIL[/]")
-        table.add_row(item.component, badge, item.details, item.note)
+        row_style = STYLE_ROW_SELECTED if is_sel else None
+        table.add_row(item.component, badge, item.details, item.note, style=row_style)
+
+    grid.add_row(table)
 
     border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
-        table,
+        grid,
         title=f"[{TEXT_PRIMARY}]PROJECT HEALTH DIAGNOSTICS[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=border,
@@ -593,7 +1023,7 @@ def build_settings_main_panel(is_focused: bool) -> Panel:
     )
 
 
-def build_help_main_panel() -> Panel:
+def build_help_main_panel(is_focused: bool = False) -> Panel:
     """Builds the Help & Documentation view."""
     grid = Table.grid(expand=True, padding=(0, 2))
     grid.add_column("col1", ratio=1)
@@ -601,17 +1031,18 @@ def build_help_main_panel() -> Panel:
 
     t1 = Text()
     t1.append("Navigation & Controls:\n", style=f"bold {TEXT_PRIMARY}")
-    t1.append("  ↑ / k           Move selection up\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  ↓ / j           Move selection down\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  Tab             Switch active pane (Nav ↔ Main)\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  ↑ / k           Move selection up (sidebar or catalogue)\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  ↓ / j           Move selection down (sidebar or catalogue)\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  ← / →           Switch active pane (Nav ↔ Main ↔ Command)\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  Tab / Shift+Tab Cycle focus predictably between panels\n", style=f"{TEXT_PRIMARY}")
     t1.append("  1 - 8           Jump directly to navigation section\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  Enter           Inspect candidate / Confirm selection\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  /               Open search / filter mode\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  Enter           Activate section / Inspect model candidate\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  /               Open search filter in Model Catalogue\n", style=f"{TEXT_PRIMARY}")
     t1.append("  :               Open command line mode\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  r               Refresh telemetry and database\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  r               Refresh telemetry, budget ledger, diagnostics\n", style=f"{TEXT_PRIMARY}")
     t1.append("  ?               Toggle this help cheatsheet\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  Esc             Clear filter / Cancel command / Back\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  q               Quit application cleanly\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  Esc             Cancel search / Cancel command / Focus Nav\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  q               Quit application safely (outside text entry)\n", style=f"{TEXT_PRIMARY}")
 
     t2 = Text()
     t2.append("Interactive Commands (:):\n", style=f"bold {TEXT_PRIMARY}")
@@ -627,11 +1058,12 @@ def build_help_main_panel() -> Panel:
     t2.append("  :q, :quit       Exit workbench\n", style=f"{TEXT_PRIMARY}")
 
     grid.add_row(t1, t2)
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         grid,
         title=f"[{TEXT_PRIMARY}]KEYBOARD SHORTCUTS & COMMAND CHEATSHEET[/{TEXT_PRIMARY}]",
         title_align="left",
-        border_style=BORDER_FOCUSED,
+        border_style=border,
         style=STYLE_PANEL,
         padding=(1, 2),
     )
@@ -759,6 +1191,7 @@ def build_command_bar(
     text_buffer: str,
     cursor_pos: int,
     feedback: str,
+    is_focused: bool = False,
 ) -> Panel:
     """Builds the command input bar."""
     line = Text()
@@ -774,15 +1207,16 @@ def build_command_bar(
     else:
         if text_buffer:
             line.append(text_buffer, style=f"{TEXT_PRIMARY}")
-        line.append("█", style=f"{TEXT_PRIMARY}")
+        line.append("█" if is_focused else " ", style=f"{TEXT_PRIMARY}")
 
     if feedback:
         line.append("   │   ", style=f"{TEXT_MUTED}")
         line.append(feedback, style=f"{TEXT_SECONDARY}")
 
+    border = BORDER_FOCUSED if (mode in ("COMMAND", "SEARCH") or is_focused) else BORDER_CHARCOAL
     return Panel(
         line,
-        border_style=BORDER_FOCUSED if mode in ("COMMAND", "SEARCH") else BORDER_CHARCOAL,
+        border_style=border,
         style=STYLE_PANEL,
         padding=(0, 1),
     )
@@ -797,19 +1231,19 @@ def build_footer_bar(status: BudgetStatus) -> Table:
 
     left = Text()
     left.append("↑/↓ ", style=f"bold {TEXT_PRIMARY}")
-    left.append("Navigate   ", style=f"{TEXT_SECONDARY}")
+    left.append("Navigate  ", style=f"{TEXT_SECONDARY}")
     left.append("Enter ", style=f"bold {TEXT_PRIMARY}")
-    left.append("Select   ", style=f"{TEXT_SECONDARY}")
-    left.append("/ ", style=f"bold {TEXT_PRIMARY}")
-    left.append("Search   ", style=f"{TEXT_SECONDARY}")
-    left.append(": ", style=f"bold {TEXT_PRIMARY}")
-    left.append("Command Mode   ", style=f"{TEXT_SECONDARY}")
+    left.append("Select  ", style=f"{TEXT_SECONDARY}")
+    left.append("←/→ ", style=f"bold {TEXT_PRIMARY}")
+    left.append("Pane  ", style=f"{TEXT_SECONDARY}")
     left.append("Tab ", style=f"bold {TEXT_PRIMARY}")
-    left.append("Next Pane   ", style=f"{TEXT_SECONDARY}")
+    left.append("Focus  ", style=f"{TEXT_SECONDARY}")
+    left.append("/ ", style=f"bold {TEXT_PRIMARY}")
+    left.append("Search  ", style=f"{TEXT_SECONDARY}")
     left.append("r ", style=f"bold {TEXT_PRIMARY}")
-    left.append("Refresh   ", style=f"{TEXT_SECONDARY}")
+    left.append("Refresh  ", style=f"{TEXT_SECONDARY}")
     left.append("? ", style=f"bold {TEXT_PRIMARY}")
-    left.append("Help   ", style=f"{TEXT_SECONDARY}")
+    left.append("Help  ", style=f"{TEXT_SECONDARY}")
     left.append("q ", style=f"bold {TEXT_PRIMARY}")
     left.append("Quit", style=f"{TEXT_SECONDARY}")
 

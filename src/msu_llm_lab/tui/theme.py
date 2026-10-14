@@ -8,7 +8,7 @@ BG_DARK = "#1C1C1C"              # Near-black charcoal background
 PANEL_BG = "#1C1C1C"             # Panel background
 PANEL_BG_SECONDARY = "#222222"   # Secondary container background
 BORDER_CHARCOAL = "#383838"      # Subtle charcoal border
-BORDER_FOCUSED = "#666666"       # Active focused border (subtle lighter gray)
+BORDER_FOCUSED = "#D0D0D0"       # Active focused border (crisp high-contrast silver/white)
 BORDER_TEAL = BORDER_CHARCOAL    # Backwards compatibility alias
 CYAN_HIGHLIGHT = "#D0D0D0"       # Backwards compatibility alias (mapped to soft light gray)
 
