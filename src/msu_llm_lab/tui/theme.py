@@ -31,6 +31,7 @@ STYLE_SUCCESS = Style(color=TEXT_PRIMARY, bold=True)
 STYLE_WARNING = Style(color=COLOR_WARNING, bold=True)
 STYLE_ERROR = Style(color=COLOR_ERROR, bold=True)
 STYLE_CYAN = Style(color=TEXT_PRIMARY, bold=True)
+STYLE_PANEL = Style(color=TEXT_PRIMARY, bgcolor=BG_DARK)
 
 # Inverted Monochrome Selection Highlights
 STYLE_ROW_SELECTED = Style(color="#1C1C1C", bgcolor="#D0D0D0", bold=True)
