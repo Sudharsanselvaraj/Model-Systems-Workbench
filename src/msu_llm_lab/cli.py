@@ -393,6 +393,173 @@ def validate_dataset(
 
 
 # ---------------------------------------------------------------------------
+# Model Evaluation & Benchmarking Subsystem (Phase 3)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="benchmark")
+def run_benchmark(
+    model_id: str = typer.Option(
+        "google/gemini-3.5-flash-lite",
+        "--model",
+        "-m",
+        help="Target candidate model ID to evaluate.",
+    ),
+    dataset_path: Path = typer.Option(
+        Path("data/evaluation/synthetic_seed_eval.jsonl"),
+        "--dataset",
+        "-d",
+        help="Path to evaluation dataset JSONL.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    split: str = typer.Option(
+        "TEST",
+        "--split",
+        "-s",
+        help="Evaluation split to benchmark: 'TEST', 'DEV', or 'ALL'.",
+    ),
+    dry_run: bool = typer.Option(
+        True,
+        "--dry-run/--live",
+        help="Run offline mock simulation (default) or live OpenRouter network dispatch.",
+    ),
+) -> None:
+    """Benchmark a candidate model across evaluation test cases with budget tracking."""
+    from msu_llm_lab.evaluation.runner import BenchmarkRunner
+    from msu_llm_lab.schemas.evaluation import DatasetSplit
+
+    mode_label = "[bold yellow]DRY-RUN (Simulated Offline)[/bold yellow]" if dry_run else "[bold green]LIVE NETWORK DISPATCH[/bold green]"
+    console.print(Panel(
+        f"[bold cyan]MSU Model Evaluation Benchmark[/bold cyan]\n"
+        f"Target Model:  [bold white]{model_id}[/bold white]\n"
+        f"Dataset:       {dataset_path.name}\n"
+        f"Mode:          {mode_label}",
+        expand=False,
+    ))
+
+    target_split = None
+    if split.upper() != "ALL":
+        try:
+            target_split = DatasetSplit(split.upper())
+        except ValueError:
+            console.print(f"[bold red]Error:[/bold red] Invalid split '{split}'. Choose TEST, DEV, or ALL.")
+            raise typer.Exit(code=1)
+
+    runner = BenchmarkRunner()
+    try:
+        report = runner.run(
+            model_id=model_id,
+            dataset_path=dataset_path,
+            split=target_split,
+            dry_run=dry_run,
+        )
+    except Exception as e:
+        console.print(f"[bold red]Benchmark Failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+    # 1. Summary Metrics Table
+    summary_table = Table(title="Benchmark Execution Summary", show_header=True, header_style="bold magenta")
+    summary_table.add_column("Metric", style="dim")
+    summary_table.add_column("Value", justify="right")
+    summary_table.add_column("Benchmark Evaluation Context", style="italic")
+
+    summary_table.add_row("Run Identifier", report.run_id, "Unique execution run ID stored in SQLite")
+    summary_table.add_row("Evaluated Cases", f"{report.completed_cases} / {report.total_cases}", f"Split: {split.upper()}")
+    summary_table.add_row("Mean Latency", f"{report.mean_latency_ms:.1f} ms", "End-to-end inference turnaround")
+    summary_table.add_row("Mean Accuracy", f"{report.mean_accuracy * 100:.1f}%", "Factual overlap against ground truth citations")
+    summary_table.add_row("Mean Groundedness", f"{report.mean_groundedness * 100:.1f}%", "Absence of unsupported hallucinations")
+    summary_table.add_row("Overall Score", f"[bold green]{report.mean_overall_score * 100:.1f}%[/bold green]", "Weighted composite rubric score")
+    summary_table.add_row("Run Spend (USD)", f"${report.total_cost_usd:.4f}", "Deducted and verified against budget ledger")
+    console.print(summary_table)
+
+    # 2. Case Results Table
+    case_table = Table(title="Per-Case Performance Breakdown", show_header=True, header_style="bold blue")
+    case_table.add_column("Case ID", style="cyan", width=12)
+    case_table.add_column("Query Snippet", style="white", width=36)
+    case_table.add_column("Latency", justify="right", width=10)
+    case_table.add_column("Accuracy", justify="right", width=10)
+    case_table.add_column("Grounded", justify="right", width=10)
+    case_table.add_column("Overall", justify="right", style="bold", width=9)
+
+    for r in report.results:
+        q_snip = r["prompt"][:34] + ("..." if len(r["prompt"]) > 34 else "")
+        case_table.add_row(
+            r["case_id"],
+            q_snip,
+            f"{r['latency_ms']:.0f} ms",
+            f"{r['accuracy'] * 100:.0f}%",
+            f"{r['groundedness'] * 100:.0f}%",
+            f"{r['overall_score'] * 100:.0f}%",
+        )
+    console.print(case_table)
+
+
+@app.command(name="compare-runs")
+def compare_runs(
+    run_a: str = typer.Argument(..., help="Run ID of the baseline evaluation run."),
+    run_b: str = typer.Argument(..., help="Run ID of the comparison evaluation run."),
+) -> None:
+    """Compare two evaluation benchmark runs side by side."""
+    from msu_llm_lab.storage.db import DatabaseManager
+
+    db = DatabaseManager()
+    data_a = db.get_evaluation_run(run_a)
+    data_b = db.get_evaluation_run(run_b)
+
+    if not data_a:
+        console.print(f"[bold red]Error:[/bold red] Run '{run_a}' not found in database.")
+        raise typer.Exit(code=1)
+    if not data_b:
+        console.print(f"[bold red]Error:[/bold red] Run '{run_b}' not found in database.")
+        raise typer.Exit(code=1)
+
+    console.print(Panel(
+        f"[bold cyan]Evaluation Run Comparison[/bold cyan]\n"
+        f"Baseline Run (A):    [white]{run_a}[/white] ({data_a['model_id']})\n"
+        f"Comparison Run (B):  [white]{run_b}[/white] ({data_b['model_id']})",
+        expand=False,
+    ))
+
+    table = Table(title="Run Comparison & Performance Deltas", show_header=True, header_style="bold magenta")
+    table.add_column("Metric", style="dim")
+    table.add_column(f"Run A ({data_a['model_id'][:18]})", justify="right")
+    table.add_column(f"Run B ({data_b['model_id'][:18]})", justify="right")
+    table.add_column("Delta (B - A)", justify="right", style="bold")
+
+    acc_a = float(data_a["mean_accuracy"])
+    acc_b = float(data_b["mean_accuracy"])
+    d_acc = acc_b - acc_a
+    d_acc_str = f"[green]+{d_acc * 100:.1f}%[/green]" if d_acc >= 0 else f"[red]{d_acc * 100:.1f}%[/red]"
+
+    lat_a = float(data_a["mean_latency_ms"])
+    lat_b = float(data_b["mean_latency_ms"])
+    d_lat = lat_b - lat_a
+    d_lat_str = f"[green]{d_lat:+.1f} ms[/green]" if d_lat <= 0 else f"[yellow]{d_lat:+.1f} ms[/yellow]"
+
+    sc_a = float(data_a["mean_overall_score"])
+    sc_b = float(data_b["mean_overall_score"])
+    d_sc = sc_b - sc_a
+    d_sc_str = f"[green]+{d_sc * 100:.1f}%[/green]" if d_sc >= 0 else f"[red]{d_sc * 100:.1f}%[/red]"
+
+    cost_a = Decimal(data_a["total_cost_usd"])
+    cost_b = Decimal(data_b["total_cost_usd"])
+    d_cost = cost_b - cost_a
+    d_cost_str = f"${d_cost:+.4f}"
+
+    table.add_row("Mean Accuracy", f"{acc_a * 100:.1f}%", f"{acc_b * 100:.1f}%", d_acc_str)
+    table.add_row("Mean Groundedness", f"{float(data_a['mean_groundedness']) * 100:.1f}%", f"{float(data_b['mean_groundedness']) * 100:.1f}%", f"{(float(data_b['mean_groundedness']) - float(data_a['mean_groundedness'])) * 100:+.1f}%")
+    table.add_row("Overall Score", f"{sc_a * 100:.1f}%", f"{sc_b * 100:.1f}%", d_sc_str)
+    table.add_row("Mean Latency", f"{lat_a:.1f} ms", f"{lat_b:.1f} ms", d_lat_str)
+    table.add_row("Total Run Spend", f"${cost_a:.4f}", f"${cost_b:.4f}", d_cost_str)
+    table.add_row("Completed Cases", f"{data_a['completed_cases']}", f"{data_b['completed_cases']}", f"{data_b['completed_cases'] - data_a['completed_cases']:+d}")
+
+    console.print(table)
+
+
+# ---------------------------------------------------------------------------
 # Budget Subcommands
 # ---------------------------------------------------------------------------
 
