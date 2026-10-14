@@ -455,7 +455,57 @@ def build_budget_main_panel(status: BudgetStatus, is_focused: bool) -> Panel:
     )
 
 
+def build_dataset_validation_panel(is_focused: bool) -> Panel:
+    """Builds the comprehensive Dataset Validation & Remediation screen."""
+    grid = Table.grid(expand=True)
+    grid.add_column("main", ratio=1)
+
+    # 1. Source Knowledge Bases Status Table
+    kb_table = Table(title="Knowledge Base Sources (100% Immutable)", box=None, expand=True, header_style=f"bold {CYAN_HIGHLIGHT}")
+    kb_table.add_column("Knowledge Base", style=f"bold {TEXT_PRIMARY}", width=25)
+    kb_table.add_column("Parsed Records", justify="right", width=16)
+    kb_table.add_column("Integrity Hash", style=f"{TEXT_MUTED}", width=20)
+    kb_table.add_column("Status", justify="center", width=8)
+    kb_table.add_column("Coverage / Role", style=f"{TEXT_SECONDARY}")
+
+    kb_table.add_row("MSU General KB", "222 Q&A pairs", "138e6893a1d54f36...", f"[bold {COLOR_SUCCESS}]PASS[/]", "Campus, admissions, faculties, general policies")
+    kb_table.add_row("MSU Programmes KB", "2,810 Q&A pairs", "a46773fea196d8fe...", f"[bold {COLOR_SUCCESS}]PASS[/]", "Academic degrees, tuition fees, career outcomes")
+    grid.add_row(kb_table)
+
+    # 2. Defect Remediation Register Table
+    rem_table = Table(title="Audit Findings & Remediation Register", box=None, expand=True, header_style=f"bold {CYAN_HIGHLIGHT}")
+    rem_table.add_column("ID", style=f"bold {CYAN_HIGHLIGHT}", width=8)
+    rem_table.add_column("Programme", style=f"{TEXT_PRIMARY}", width=23)
+    rem_table.add_column("Defect Type", style=f"{TEXT_MUTED}", width=21)
+    rem_table.add_column("Action / Pipeline Status", justify="center", width=25)
+    rem_table.add_column("Resolution Policy", style=f"{TEXT_SECONDARY} italic")
+
+    rem_table.add_row("REM-001", "Broadcasting (Hons)", "Mismatched Question", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected question to Broadcasting")
+    rem_table.add_row("REM-002", "Product Design (Hons)", "New Media Duration", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected duration question label")
+    rem_table.add_row("REM-003", "Master of Design", "TESL Question Tag", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected question tag to Master of Design")
+    rem_table.add_row("REM-004", "PhD Food Service Tech", "Applied Science Tag", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected question to Food Service Technology")
+    rem_table.add_row("REM-005", "PhD Applied Science", "Contradictory Tuition", f"[bold {COLOR_WARNING}]OFFICIAL VERIF PENDING[/]", "RM62.5k vs RM63.5k — Zero arbitrary guessing")
+    rem_table.add_row("REM-006", "Multiple Programmes", "Duplicate Q&A Pairs", f"[bold {CYAN_HIGHLIGHT}]INVESTIGATION PENDING[/]", "Cross-programme comparison before merge")
+    rem_table.add_row("REM-007", "MBBS / General", "Time-Sensitive Intakes", f"[bold {COLOR_WARNING}]OFFICIAL VERIF PENDING[/]", "Verify dates against official 2026/27 calendar")
+    rem_table.add_row("REM-008", "Education (TESL)", "MPU / MUET Standards", f"[bold {COLOR_ERROR}]KB OWNER ESCALATED[/]", "Escalate MPU subject & language requirements")
+    grid.add_row(rem_table)
+
+    # 3. Guidance Footer
+    note = Text("\nSAFETY INVARIANT: Original KBs remain immutable. Approved fixes write strictly to versioned copies (data/remediated/). Never benchmark models against known-bad KB records.", style=f"{TEXT_MUTED} italic")
+    grid.add_row(note)
+
+    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    return Panel(
+        grid,
+        title=f"[{TEXT_PRIMARY}]DATASET VALIDATION & REMEDIATION PIPELINE[/{TEXT_PRIMARY}]",
+        title_align="left",
+        border_style=border,
+        padding=(0, 1),
+    )
+
+
 def build_roadmap_panel(title_str: str, step_str: str, items: List[str], is_focused: bool) -> Panel:
+
     """Builds clean roadmap panel for upcoming roadmap steps."""
     t = Text()
     t.append("Component Status: ", style=f"{TEXT_SECONDARY}")
