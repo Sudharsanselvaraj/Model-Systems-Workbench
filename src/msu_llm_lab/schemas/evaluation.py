@@ -19,6 +19,9 @@ class DataClassification(str, Enum):
     UNCLASSIFIED = "UNCLASSIFIED"
 
 
+CaseConfidentiality = DataClassification
+
+
 class VerificationStatus(str, Enum):
     """Verification state for evaluation ground truths."""
     UNVERIFIED = "UNVERIFIED"
