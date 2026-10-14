@@ -16,6 +16,8 @@ from msu_llm_lab.tui.screens import (
     NAV_ITEMS,
     build_top_header,
     build_navigation_panel,
+    build_system_resources_panel,
+    build_request_metrics_panel,
     build_system_and_metrics_panel,
     build_inference_status_panel,
     build_model_catalogue_panel,
@@ -104,7 +106,7 @@ class WorkbenchTUI:
             return layout
 
         # Adjust component sizing dynamically based on height
-        top_size = 12 if height >= 34 else 10
+        top_size = 14 if height >= 34 else 12
         bottom_size = 7 if height >= 34 else 6
 
         layout = Layout()
@@ -122,6 +124,10 @@ class WorkbenchTUI:
             Layout(name="inf_status", size=26),
         )
 
+        layout["top_row"]["sys_metrics"].split(
+            Layout(name="sys_res", ratio=1),
+            Layout(name="req_metrics", ratio=1),
+        )
 
         layout["bottom_row"].split_row(
             Layout(name="logs", ratio=1),
@@ -142,9 +148,12 @@ class WorkbenchTUI:
             build_navigation_panel(self.nav_index, self.focused_pane == "NAV")
         )
 
-        # 3. System Resources and Request Metrics
-        layout["top_row"]["sys_metrics"].update(
-            build_system_and_metrics_panel(self.sys_telemetry, self.inf_telemetry)
+        # 3. System Resources and Request Metrics (Separate stacked panels)
+        layout["top_row"]["sys_metrics"]["sys_res"].update(
+            build_system_resources_panel(self.sys_telemetry)
+        )
+        layout["top_row"]["sys_metrics"]["req_metrics"].update(
+            build_request_metrics_panel(self.inf_telemetry)
         )
 
         # 4. Inference Status
