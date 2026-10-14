@@ -1,4 +1,4 @@
-# MSU LLM Inference Workbench — Complete System Architecture (Phases 0–4)
+# MSU LLM Inference Workbench — Complete System Architecture (Phases 0–5)
 
 ```mermaid
 graph TB
@@ -11,6 +11,7 @@ graph TB
         CLI --> CMD_Remediate["remediate-kb"]
         CLI --> CMD_Validate["validate-dataset"]
         CLI --> CMD_Benchmark["benchmark & compare-runs"]
+        CLI --> CMD_BenchmarkRAG["benchmark-rag"]
         CLI --> CMD_Traces["import-traces"]
         CLI --> CMD_Budget["budget status"]
         CLI --> CMD_Models["models list"]
@@ -173,13 +174,14 @@ sequenceDiagram
 
 ---
 
-## Subsystem Matrix (Phases 0 to 4)
+## Subsystem Matrix (Phases 0 to 5)
 
 | Subsystem | Primary Python Modules | CLI Command | Core Safety / Invariant |
 |---|---|---|---|
 | **Audit & Remediation** | `msu_llm_lab.audit.*`<br/>`msu_llm_lab.remediation.*` | `msu-llm-lab audit-kb`<br/>`msu-llm-lab remediate-kb` | Source KB is read-only; SHA-256 hashed before and after. Never auto-resolves contradictions. |
 | **Dataset Governance** | `msu_llm_lab.schemas.*`<br/>`msu_llm_lab.dataset.*` | `msu-llm-lab validate-dataset` | Verified cases require explicit source citations. N-gram detector prevents cross-split leakage. |
 | **Evaluation & Providers** | `msu_llm_lab.providers.*`<br/>`msu_llm_lab.evaluation.*` | `msu-llm-lab benchmark`<br/>`msu-llm-lab compare-runs` | Fail-closed gate blocks non-public cases. Dry-run by default. Preflight budget limits enforced. |
+| **Decoupled RAG Benchmark** | `msu_llm_lab.rag.*` | `msu-llm-lab benchmark-rag` | Evaluates retrieval (hit rate/precision) independently from generation (correctness/groundedness). |
 | **Trace Diagnostics** | `msu_llm_lab.traces.*` | `msu-llm-lab import-traces` | PII and API keys redacted offline. Classifications labeled as candidate hypotheses, not ground truth. |
 | **Spend Governance** | `msu_llm_lab.core.budget`<br/>`msu_llm_lab.storage.db` | `msu-llm-lab budget status` | Exact `Decimal` arithmetic and integer micro-dollars. Local governance ceilings ($0.50/$2.00/$10.00). |
 | **Interactive Terminal** | `msu_llm_lab.tui.*` | `msu-llm-lab ui` | Hardware telemetry, tab navigation, model catalog, and budget ledger inspection. |
