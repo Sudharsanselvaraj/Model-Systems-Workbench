@@ -8,6 +8,11 @@ from msu_llm_lab.core.config import settings, BudgetPolicy
 from msu_llm_lab.storage.db import DatabaseManager
 
 
+class BudgetExceededError(RuntimeError):
+    """Raised when projected or actual spend exceeds local governance policy ceilings."""
+    pass
+
+
 class BudgetStatus(BaseModel):
     """Snapshot of current spend vs local governance ceilings."""
     total_ceiling_usd: Decimal
@@ -94,6 +99,17 @@ class BudgetService:
                 )
 
         return True, "Spend is permitted under local experiment policies."
+
+    def check_preflight_budget(
+        self,
+        estimated_cost_usd: Decimal,
+        is_pilot: bool = True,
+        model_id: Optional[str] = None,
+    ) -> None:
+        """Validates that projected evaluation run does not breach ceilings, raising BudgetExceededError on failure."""
+        permitted, reason = self.check_spend_permitted(estimated_cost_usd, is_pilot=is_pilot)
+        if not permitted:
+            raise BudgetExceededError(f"Budget preflight check failed: {reason}")
 
     def record_spend(
         self,
