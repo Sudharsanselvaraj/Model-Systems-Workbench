@@ -14,17 +14,20 @@ from msu_llm_lab.models.catalog import ModelCandidate
 from msu_llm_lab.tui.health import HealthCheckItem
 from msu_llm_lab.tui.telemetry import SystemTelemetry, InferenceTelemetry, LogBuffer
 from msu_llm_lab.tui.theme import (
+    BORDER_CHARCOAL,
     BORDER_TEAL,
     BORDER_FOCUSED,
     CYAN_HIGHLIGHT,
     TEXT_PRIMARY,
     TEXT_SECONDARY,
     TEXT_MUTED,
+    TEXT_BRIGHT,
     COLOR_SUCCESS,
     COLOR_WARNING,
     COLOR_ERROR,
     STYLE_ROW_SELECTED,
     render_sparkline,
+    render_2row_histogram,
 )
 
 
@@ -41,22 +44,22 @@ NAV_ITEMS = [
 
 
 def build_top_header() -> Table:
-    """Builds the single-line restrained top header bar."""
+    """Builds the single-line restrained top header bar matching charcoal reference."""
     header = Table.grid(expand=True)
     header.add_column("left", justify="left", width=38, no_wrap=True)
     header.add_column("center", justify="center", ratio=1, no_wrap=True)
     header.add_column("right", justify="right", width=26, no_wrap=True)
 
     left_text = Text()
-    left_text.append("[MSU] ", style=f"bold {CYAN_HIGHLIGHT}")
+    left_text.append("[MSU] ", style=f"bold {TEXT_PRIMARY}")
     left_text.append("LLM INFERENCE WORKBENCH ", style=f"bold {TEXT_PRIMARY}")
     left_text.append("v0.1.0", style=f"{TEXT_MUTED}")
 
     center_text = Text()
-    center_text.append("Project: msu-llm-lab   │   ", style=f"{TEXT_SECONDARY}")
+    center_text.append("Project: msu-llm-lab  |  ", style=f"{TEXT_SECONDARY}")
     center_text.append("Mode: ", style=f"{TEXT_SECONDARY}")
-    center_text.append("DRY RUN ", style=f"bold {COLOR_SUCCESS}")
-    center_text.append("(Zero Spend)", style=f"{TEXT_MUTED}")
+    center_text.append("DRY RUN ", style=f"bold {TEXT_PRIMARY}")
+    center_text.append("(Zero API Spend)", style=f"{TEXT_MUTED}")
 
     now_str = datetime.now().strftime("%a %d %b %Y  %H:%M:%S")
     right_text = Text(now_str, style=f"{TEXT_SECONDARY}")
@@ -65,35 +68,43 @@ def build_top_header() -> Table:
     return header
 
 
-
 def build_navigation_panel(active_index: int, is_focused: bool) -> Panel:
-    """Builds the upper-left navigation sidebar panel."""
+    """Builds the upper-left navigation sidebar panel matching charcoal monochrome reference."""
     grid = Table.grid(expand=True, padding=(0, 0))
-    grid.add_column("key", width=3, justify="left")
-    grid.add_column("title", justify="left", no_wrap=True)
+    grid.add_column("row", ratio=1, no_wrap=True)
 
-    for idx, (num_str, title, _) in enumerate(NAV_ITEMS):
+    items = [
+        "Model Catalogue",
+        "Budget & Usage",
+        "Dataset Validation",
+        "Evaluation Runs",
+        "Traces & Observability",
+        "Project Health",
+        "Settings",
+        "Help",
+    ]
+
+    for idx, title in enumerate(items):
         is_active = (idx == active_index)
 
+        line = Text()
         if is_active:
-            row_style = f"bold #080F14 on {CYAN_HIGHLIGHT}" if is_focused else f"bold {CYAN_HIGHLIGHT} on #10262E"
-            grid.add_row(
-                Text(f" {num_str} ", style=row_style),
-                Text(f"{title} ", style=row_style),
-            )
+            # Inverted monochrome selection bar
+            line.append("> ", style=STYLE_ROW_SELECTED)
+            line.append(f"{title:<22}", style=STYLE_ROW_SELECTED)
         else:
-            grid.add_row(
-                Text(f" {num_str}", style=f"{TEXT_MUTED}"),
-                Text(title, style=f"{TEXT_SECONDARY}"),
-            )
+            line.append("- ", style=f"{TEXT_MUTED}")
+            line.append(title, style=f"{TEXT_SECONDARY}")
+        grid.add_row(line)
 
-    grid.add_row(Text(""), Text(""))
-    grid.add_row(
-        Text(" q", style=f"{TEXT_MUTED}"),
-        Text("Exit", style=f"{TEXT_SECONDARY}"),
-    )
+    # Subtle separator before exit
+    grid.add_row(Text("──────────────────────", style=f"{BORDER_CHARCOAL}"))
+    exit_line = Text()
+    exit_line.append("- ", style=f"{TEXT_MUTED}")
+    exit_line.append("Exit", style=f"{TEXT_SECONDARY}")
+    grid.add_row(exit_line)
 
-    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         grid,
         title=f"[{TEXT_PRIMARY}]NAVIGATION[/{TEXT_PRIMARY}]",
@@ -103,145 +114,139 @@ def build_navigation_panel(active_index: int, is_focused: bool) -> Panel:
     )
 
 
-def _build_metric_cell(
+def _build_histogram_metric_cell(
     title: str,
     title_val: str,
-    top_right: str,
-    sparkline: str,
-    spark_color: str,
+    top_tier: str,
+    bot_tier: str,
+    baseline: str,
     bot_left: str,
     bot_right: str = "60s",
+    y_max: str = "100",
+    y_mid: str = " 50",
+    y_min: str = "  0",
 ) -> Table:
-    """Helper to build a 3-row metric cell that never wraps."""
+    """Builds a compact 5-row terminal histogram cell matching the btop reference."""
     cell = Table.grid(expand=True)
-    cell.add_column("l", justify="left", no_wrap=True)
-    cell.add_column("r", justify="right", no_wrap=True)
+    cell.add_column("main", ratio=1)
 
-    t_left = Text()
-    t_left.append(f"{title} ", style=f"bold {CYAN_HIGHLIGHT}")
-    t_left.append(title_val, style=f"bold {CYAN_HIGHLIGHT}" if "CPU" in title else f"{TEXT_PRIMARY}")
-    t_right = Text(top_right, style=f"{TEXT_MUTED}" if "%" not in top_right else (f"bold {COLOR_SUCCESS}" if "DISK" in title else f"bold {CYAN_HIGHLIGHT}"))
-    cell.add_row(t_left, t_right)
+    # Line 1: Header line (e.g. CPU 23% or MEM 5% 0.8/16.0 GB)
+    header = Table.grid(expand=True)
+    header.add_column("l", justify="left", no_wrap=True)
+    header.add_column("r", justify="right", no_wrap=True)
+    h_l = Text()
+    h_l.append(f"{title}  ", style=f"{TEXT_SECONDARY}")
+    h_l.append(f"{title_val}", style=f"bold {TEXT_PRIMARY}")
+    header.add_row(h_l, Text(""))
+    cell.add_row(header)
 
-    cell.add_row(Text(sparkline, style=spark_color), Text(""))
-    cell.add_row(Text(bot_left, style=f"{TEXT_MUTED}"), Text(bot_right, style=f"{TEXT_MUTED}"))
+    # Line 2: 100 ┤ <top tier bars>
+    l2 = Text()
+    l2.append(f"{y_max} ┤ ", style=f"{TEXT_MUTED}")
+    l2.append(top_tier, style=f"{TEXT_PRIMARY}")
+    cell.add_row(l2)
+
+    # Line 3:  50 ┤ <bottom tier bars>
+    l3 = Text()
+    l3.append(f"{y_mid} ┤ ", style=f"{TEXT_MUTED}")
+    l3.append(bot_tier, style=f"{TEXT_PRIMARY}")
+    cell.add_row(l3)
+
+    # Line 4:   0 └─ <baseline>
+    l4 = Text()
+    l4.append(f"{y_min} └", style=f"{TEXT_MUTED}")
+    l4.append(baseline, style=f"{TEXT_MUTED}")
+    cell.add_row(l4)
+
+    # Line 5: Details and time axis label (e.g. 2.3 / 10 cores   60s)
+    footer = Table.grid(expand=True)
+    footer.add_column("fl", justify="left", no_wrap=True)
+    footer.add_column("fr", justify="right", no_wrap=True)
+    footer.add_row(
+        Text(f"    {bot_left}", style=f"{TEXT_SECONDARY}"),
+        Text(bot_right, style=f"{TEXT_MUTED}"),
+    )
+    cell.add_row(footer)
+
     return cell
 
 
-def build_system_resources_panel(telemetry: SystemTelemetry) -> Table:
-    """Builds the top-middle system resource graphs (CPU, MEM, DISK)."""
-    grid = Table.grid(expand=True, padding=(0, 1))
+def build_system_resources_panel(telemetry: SystemTelemetry) -> Panel:
+    """Builds the top-middle system resource graphs (CPU, MEM, DISK) as a standalone Panel."""
+    grid = Table.grid(expand=True, padding=(0, 2))
     grid.add_column("cpu", ratio=1)
     grid.add_column("mem", ratio=1)
     grid.add_column("disk", ratio=1)
 
     # 1. CPU
     cpu_pct, cpu_detail, cpu_hist = telemetry.get_cpu_info()
-    cpu_spark = render_sparkline(cpu_hist, 0.0, 100.0, length=13)
-    cpu_cell = _build_metric_cell(
-        "CPU",
-        f"{int(cpu_pct)}%",
-        "100%",
-        cpu_spark,
-        CYAN_HIGHLIGHT,
-        cpu_detail,
-        "60s",
-    )
+    cpu_top, cpu_bot, cpu_base = render_2row_histogram(cpu_hist, 0.0, 100.0, width=18)
+    cpu_cell = _build_histogram_metric_cell("CPU", f"{int(cpu_pct)}%", cpu_top, cpu_bot, cpu_base, cpu_detail, "60s", "100", " 50", "  0")
 
     # 2. MEM
     mem_pct, mem_detail, mem_hist = telemetry.get_mem_info()
-    mem_spark = render_sparkline(mem_hist, 0.0, 100.0, length=13)
-    mem_cell = _build_metric_cell(
-        "MEM",
-        mem_detail,
-        f"{int(mem_pct)}%",
-        mem_spark,
-        CYAN_HIGHLIGHT,
-        "100%",
-        "60s",
-    )
+    mem_top, mem_bot, mem_base = render_2row_histogram(mem_hist, 0.0, 100.0, width=18)
+    mem_cell = _build_histogram_metric_cell("MEM", f"{int(mem_pct)}%   {mem_detail}", mem_top, mem_bot, mem_base, "", "60s", "100", " 50", "  0")
 
     # 3. DISK
     disk_pct, disk_detail, disk_hist = telemetry.get_disk_info()
-    disk_spark = render_sparkline(disk_hist, 0.0, 100.0, length=13)
-    disk_cell = _build_metric_cell(
-        "DISK",
-        disk_detail,
-        f"{int(disk_pct)}%",
-        disk_spark,
-        COLOR_SUCCESS,
-        "100%",
-        "60s",
-    )
+    disk_top, disk_bot, disk_base = render_2row_histogram(disk_hist, 0.0, 100.0, width=18)
+    disk_cell = _build_histogram_metric_cell("DISK", f"{int(disk_pct)}%   {disk_detail}", disk_top, disk_bot, disk_base, "", "60s", "100", " 50", "  0")
 
     grid.add_row(cpu_cell, mem_cell, disk_cell)
-    return grid
+    return Panel(
+        grid,
+        title=f"[{TEXT_PRIMARY}]SYSTEM RESOURCES (LOCAL)[/{TEXT_PRIMARY}]",
+        title_align="left",
+        border_style=BORDER_CHARCOAL,
+        padding=(0, 1),
+    )
 
 
-def build_request_metrics_panel(telemetry: InferenceTelemetry) -> Table:
-    """Builds the 4 mini request metric sparkline charts."""
-    grid = Table.grid(expand=True, padding=(0, 1))
-    grid.add_column("col1", ratio=1, no_wrap=True)
-    grid.add_column("col2", ratio=1, no_wrap=True)
-    grid.add_column("col3", ratio=1, no_wrap=True)
-    grid.add_column("col4", ratio=1, no_wrap=True)
+def build_request_metrics_panel(telemetry: InferenceTelemetry) -> Panel:
+    """Builds the 4 mini request metric histogram charts."""
+    grid = Table.grid(expand=True, padding=(0, 2))
+    grid.add_column("c1", ratio=1)
+    grid.add_column("c2", ratio=1)
+    grid.add_column("c3", ratio=1)
+    grid.add_column("c4", ratio=1)
 
-    # 1. Latency
-    c1 = Text()
-    c1.append("Latency (ms)\n", style=f"{TEXT_SECONDARY}")
-    c1.append("2000 ─┐\n", style=f"{TEXT_MUTED}")
-    c1.append("1000  │  ▂▃▄▅\n", style=f"{CYAN_HIGHLIGHT}")
-    c1.append("   0 ─┴─── 60s\n", style=f"{TEXT_MUTED}")
-    c1.append("No samples", style=f"{TEXT_MUTED} italic")
+    lat_samples = list(telemetry.latency_history) if telemetry.is_live else []
+    tok_samples = list(telemetry.token_history) if telemetry.is_live else []
+    con_samples = list(telemetry.concurrency_history) if telemetry.is_live else []
+    err_samples = list(telemetry.error_history) if telemetry.is_live else []
 
-    # 2. Tokens / Sec
-    c2 = Text()
-    c2.append("Tokens/Sec\n", style=f"{TEXT_SECONDARY}")
-    c2.append("500 ─┐\n", style=f"{TEXT_MUTED}")
-    c2.append("250  │  ▂▃▄▅\n", style=f"{COLOR_SUCCESS}")
-    c2.append("  0 ─┴─── 60s\n", style=f"{TEXT_MUTED}")
-    c2.append("No samples", style=f"{TEXT_MUTED} italic")
+    lat_top, lat_bot, lat_base = render_2row_histogram(lat_samples, 0.0, 2000.0, width=16)
+    tok_top, tok_bot, tok_base = render_2row_histogram(tok_samples, 0.0, 500.0, width=16)
+    con_top, con_bot, con_base = render_2row_histogram(con_samples, 0.0, 10.0, width=16)
+    err_top, err_bot, err_base = render_2row_histogram(err_samples, 0.0, 10.0, width=16)
 
-    # 3. Concurrent Requests
-    c3 = Text()
-    c3.append("Concurrent\n", style=f"{TEXT_SECONDARY}")
-    c3.append("10 ─┐\n", style=f"{TEXT_MUTED}")
-    c3.append(" 5  │  ▂▃▄▅\n", style=f"{COLOR_WARNING}")
-    c3.append(" 0 ─┴─── 60s\n", style=f"{TEXT_MUTED}")
-    c3.append("No samples", style=f"{TEXT_MUTED} italic")
-
-    # 4. Error Rate (%)
-    c4 = Text()
-    c4.append("Error Rate (%)\n", style=f"{TEXT_SECONDARY}")
-    c4.append("10 ─┐\n", style=f"{TEXT_MUTED}")
-    c4.append(" 5  │\n", style=f"{COLOR_ERROR}")
-    c4.append(" 0 ─┴─── 60s\n", style=f"{TEXT_MUTED}")
-    c4.append("No samples", style=f"{TEXT_MUTED} italic")
+    c1 = _build_histogram_metric_cell("Request Latency (ms)", "", lat_top, lat_bot, lat_base, "", "60s", "2000", "1000", "   0")
+    c2 = _build_histogram_metric_cell("Tokens / Second", "", tok_top, tok_bot, tok_base, "", "60s", " 500", " 250", "   0")
+    c3 = _build_histogram_metric_cell("Concurrent Requests", "", con_top, con_bot, con_base, "", "60s", "  10", "   5", "   0")
+    c4 = _build_histogram_metric_cell("Error Rate (%)", "", err_top, err_bot, err_base, "", "60s", "  10", "   5", "   0")
 
     grid.add_row(c1, c2, c3, c4)
-    return grid
-
-
+    title_str = "REQUEST METRICS (No live inference yet)" if not telemetry.is_live and telemetry.sample_count == 0 else "REQUEST METRICS"
+    return Panel(
+        grid,
+        title=f"[{TEXT_PRIMARY}]{title_str}[/{TEXT_PRIMARY}]",
+        title_align="left",
+        border_style=BORDER_CHARCOAL,
+        padding=(0, 1),
+    )
 
 
 def build_system_and_metrics_panel(
     sys_telemetry: SystemTelemetry,
     inf_telemetry: InferenceTelemetry,
-) -> Panel:
-    """Combines System Resources and Request Metrics into one upper-center panel."""
+) -> Table:
+    """Combines System Resources and Request Metrics into a single view for compatibility."""
     outer = Table.grid(expand=True)
     outer.add_column("main", ratio=1)
-
-    outer.add_row(Text("SYSTEM RESOURCES (LOCAL)", style=f"bold {CYAN_HIGHLIGHT}"))
     outer.add_row(build_system_resources_panel(sys_telemetry))
-    outer.add_row(Text("\nREQUEST METRICS (No live inference yet)", style=f"bold {TEXT_SECONDARY}"))
     outer.add_row(build_request_metrics_panel(inf_telemetry))
-
-    return Panel(
-        outer,
-        border_style=BORDER_TEAL,
-        padding=(0, 1),
-    )
+    return outer
 
 
 def build_inference_status_panel(status: BudgetStatus) -> Panel:
@@ -250,18 +255,19 @@ def build_inference_status_panel(status: BudgetStatus) -> Panel:
     table.add_column("k", style=f"{TEXT_SECONDARY}", width=13)
     table.add_column("v", justify="right")
 
-    table.add_row("Mode:", Text("DRY RUN", style=f"bold {COLOR_SUCCESS}"))
+    table.add_row("Mode:", Text("DRY RUN", style=f"bold {TEXT_PRIMARY}"))
     table.add_row("API Calls:", Text("0", style=f"{TEXT_PRIMARY}"))
     table.add_row("Total Spend:", Text(f"${status.cumulative_spend_usd:.4f}", style=f"{TEXT_PRIMARY}"))
-    table.add_row("Pilot Limit:", Text(f"${status.pilot_ceiling_usd:.2f}", style=f"{CYAN_HIGHLIGHT}"))
-    table.add_row("Total Limit:", Text(f"${status.total_ceiling_usd:.2f}", style=f"{CYAN_HIGHLIGHT}"))
-    table.add_row("Remaining:", Text(f"${status.remaining_total_usd:.2f} (100%)", style=f"bold {COLOR_SUCCESS}"))
+    table.add_row("Pilot Limit:", Text(f"${status.pilot_ceiling_usd:.2f}", style=f"{TEXT_PRIMARY}"))
+    table.add_row("Total Limit:", Text(f"${status.total_ceiling_usd:.2f}", style=f"{TEXT_PRIMARY}"))
+    table.add_row("Remaining:", Text(f"${status.remaining_total_usd:.2f}", style=f"bold {TEXT_PRIMARY}"))
+    table.add_row("", Text("(100%)", style=f"{TEXT_SECONDARY}"))
 
     return Panel(
         table,
         title=f"[{TEXT_PRIMARY}]INFERENCE STATUS[/{TEXT_PRIMARY}]",
         title_align="left",
-        border_style=BORDER_TEAL,
+        border_style=BORDER_CHARCOAL,
         padding=(0, 1),
     )
 
@@ -281,21 +287,21 @@ def build_model_catalogue_panel(
     outer = Table.grid(expand=True)
     outer.add_column("main", ratio=1)
 
-    # Sub-header bar
+    # Sub-header bar matching reference
     count_str = f"{len(candidates)} candidates" if not search_query else f"{len(filtered)}/{len(candidates)} filtered"
     sub_header = Table.grid(expand=True)
     sub_header.add_column("left", justify="left")
     sub_header.add_column("right", justify="right")
     sub_header.add_row(
-        Text(f"{count_str}   │   ↑/↓ navigate   │   Enter: details   │   / search   │   r refresh", style=f"{TEXT_MUTED}"),
-        Text(f"Filter: '{search_query}'" if search_query else "", style=f"bold {CYAN_HIGHLIGHT}"),
+        Text(f"{count_str}   ↑/↓ navigate  |  Enter: details  |  / search  |  r refresh", style=f"{TEXT_SECONDARY}"),
+        Text(f"Filter: '{search_query}'" if search_query else "", style=f"bold {TEXT_PRIMARY}"),
     )
     outer.add_row(sub_header)
 
     if not filtered:
         empty_text = Text(f"\nNo models matching search query '{search_query}'. Press Esc to clear filter.", style=f"bold {COLOR_WARNING}")
         outer.add_row(empty_text)
-        border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+        border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
         return Panel(
             outer,
             title=f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]",
@@ -304,7 +310,7 @@ def build_model_catalogue_panel(
             padding=(0, 1),
         )
 
-    # Table of candidates
+    # Table of candidates with inverted monochrome selection
     table = Table(
         box=None,
         expand=True,
@@ -313,12 +319,12 @@ def build_model_catalogue_panel(
         header_style=f"bold {TEXT_SECONDARY}",
     )
     table.add_column("#", width=3, justify="left")
-    table.add_column("Model ID", width=28, no_wrap=True)
-    table.add_column("Provider", width=11)
-    table.add_column("Context", width=12, justify="right")
-    table.add_column("Deploy Mode", width=19)
-    table.add_column("Est. $/1M (In/Out)", width=19, justify="right")
-    table.add_column("Status", width=12, justify="center")
+    table.add_column("Model ID", width=30, no_wrap=True)
+    table.add_column("Provider", width=12)
+    table.add_column("Context", width=14, justify="right")
+    table.add_column("Deploy Mode", width=20)
+    table.add_column("Est. $/1M (In/Out)", width=22, justify="right")
+    table.add_column("Status", width=14, justify="center")
 
     effective_sel = max(0, min(selected_index, len(filtered) - 1))
     selected_candidate = filtered[effective_sel][1]
@@ -331,7 +337,7 @@ def build_model_catalogue_panel(
         status_disp = "UNVERIFIED"
 
         if is_sel:
-            # Highlighted row matching mockup: cyan bar with black text
+            # Inverted monochrome highlight: dark text on light gray background
             table.add_row(
                 num_str,
                 m.model_id,
@@ -364,7 +370,7 @@ def build_model_catalogue_panel(
 
     # Col 1: Model parameters
     col1 = Text()
-    col1.append(f"{selected_candidate.model_id}\n", style=f"bold {CYAN_HIGHLIGHT}")
+    col1.append(f"{selected_candidate.model_id}\n", style=f"bold {TEXT_PRIMARY}")
     col1.append("Provider:     ", style=f"{TEXT_SECONDARY}")
     col1.append(f"{selected_candidate.provider}\n", style=f"{TEXT_PRIMARY}")
     col1.append("Context:      ", style=f"{TEXT_SECONDARY}")
@@ -377,33 +383,33 @@ def build_model_catalogue_panel(
     col1.append("License:      ", style=f"{TEXT_SECONDARY}")
     col1.append(f"{selected_candidate.license}\n", style=f"{TEXT_PRIMARY}")
     col1.append("Status:       ", style=f"{TEXT_SECONDARY}")
-    col1.append(f"{selected_candidate.verification_status}", style=f"bold {COLOR_WARNING}")
+    col1.append(f"{selected_candidate.verification_status}", style=f"bold {TEXT_PRIMARY}")
 
     # Col 2: Description
     col2 = Text()
-    col2.append("Description\n", style=f"bold {CYAN_HIGHLIGHT}")
+    col2.append("Description\n", style=f"bold {TEXT_PRIMARY}")
     desc_text = (
         "Fast and efficient multimodal model from Google. Optimized for high-throughput inference and long context."
         if "gemini" in selected_candidate.model_id
         else selected_candidate.experimental_purpose
     )
     col2.append(f"{desc_text}\n\n", style=f"{TEXT_PRIMARY}")
-    col2.append("⚠ Model ID and pricing require live provider verification in a future step. Currently for planning only.", style=f"{COLOR_WARNING} italic")
+    col2.append("⚠ Model ID and pricing require live provider verification in a future step.\nCurrently for planning only.", style=f"{TEXT_SECONDARY} italic")
 
     # Col 3: Capabilities
     col3 = Text()
-    col3.append("Capabilities (from catalog)\n", style=f"bold {CYAN_HIGHLIGHT}")
-    col3.append("▸ Multimodal (text, image, video, audio)\n", style=f"{TEXT_PRIMARY}")
-    col3.append("▸ Large context window\n", style=f"{TEXT_PRIMARY}")
-    col3.append("▸ Suitable for tool use and agentic workflows\n", style=f"{TEXT_PRIMARY}")
-    col3.append("▸ Good speed and cost efficiency\n", style=f"{TEXT_PRIMARY}")
-    col3.append("▸ Verify exact model ID and pricing before use", style=f"{TEXT_MUTED}")
+    col3.append("Capabilities (from catalog)\n", style=f"bold {TEXT_PRIMARY}")
+    col3.append("► Multimodal (text, image, video, audio)\n", style=f"{TEXT_PRIMARY}")
+    col3.append("► Large context window\n", style=f"{TEXT_PRIMARY}")
+    col3.append("► Suitable for tool use and agentic workflows\n", style=f"{TEXT_PRIMARY}")
+    col3.append("► Good speed and cost efficiency\n", style=f"{TEXT_PRIMARY}")
+    col3.append("► Verify exact model ID and pricing before use", style=f"{TEXT_MUTED}")
 
     inspector_grid.add_row(col1, col2, col3)
     outer.add_row(Text(""))
     outer.add_row(inspector_grid)
 
-    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         outer,
         title=f"[{TEXT_PRIMARY}]MODEL CATALOGUE[/{TEXT_PRIMARY}]",
@@ -418,22 +424,22 @@ def build_budget_main_panel(status: BudgetStatus, is_focused: bool) -> Panel:
     grid = Table.grid(expand=True)
     grid.add_column("main", ratio=1)
 
-    c_table = Table(title="Spend Ceilings & Tracking Policies", box=None, expand=True, header_style=f"bold {CYAN_HIGHLIGHT}")
+    c_table = Table(title="Spend Ceilings & Tracking Policies", box=None, expand=True, header_style=f"bold {TEXT_PRIMARY}")
     c_table.add_column("Policy Metric", style=f"{TEXT_SECONDARY}", no_wrap=True)
     c_table.add_column("Configured Ceiling", justify="right")
     c_table.add_column("Recorded Spend", justify="right")
-    c_table.add_column("Remaining Balance", justify="right", style=f"bold {COLOR_SUCCESS}")
+    c_table.add_column("Remaining Balance", justify="right", style=f"bold {TEXT_PRIMARY}")
     c_table.add_column("Status", justify="center")
 
-    pilot_st = f"[bold {COLOR_ERROR}]EXHAUSTED[/]" if status.is_pilot_exhausted else f"[bold {COLOR_SUCCESS}]ACTIVE[/]"
-    total_st = f"[bold {COLOR_ERROR}]EXHAUSTED[/]" if status.is_total_exhausted else f"[bold {COLOR_SUCCESS}]ACTIVE[/]"
+    pilot_st = f"[bold {COLOR_ERROR}]EXHAUSTED[/]" if status.is_pilot_exhausted else f"[bold {TEXT_PRIMARY}]ACTIVE[/]"
+    total_st = f"[bold {COLOR_ERROR}]EXHAUSTED[/]" if status.is_total_exhausted else f"[bold {TEXT_PRIMARY}]ACTIVE[/]"
 
     c_table.add_row("Initial Pilot Budget", f"${status.pilot_ceiling_usd:.4f}", f"${status.pilot_spend_usd:.4f}", f"${status.remaining_pilot_usd:.4f}", pilot_st)
     c_table.add_row("Total Experiment Ceiling", f"${status.total_ceiling_usd:.4f}", f"${status.cumulative_spend_usd:.4f}", f"${status.remaining_total_usd:.4f}", total_st)
     grid.add_row(c_table)
 
     s_table = Table(title="Execution Safeguards", box=None, expand=True, header_style=f"bold {TEXT_SECONDARY}")
-    s_table.add_column("Rule", style=f"{CYAN_HIGHLIGHT}")
+    s_table.add_column("Rule", style=f"bold {TEXT_PRIMARY}")
     s_table.add_column("Limit / State", justify="right")
     s_table.add_column("Enforcement Action", style=f"{TEXT_MUTED} italic")
 
@@ -443,9 +449,9 @@ def build_budget_main_panel(status: BudgetStatus, is_focused: bool) -> Panel:
     s_table.add_row("Max Single Case Spend", f"${status.per_case_ceiling_usd:.4f} USD", "Per-case circuit breaker halts run")
     grid.add_row(s_table)
 
-    grid.add_row(Text("\nNOTE: Ceilings are local experiment tracking policies, NOT provider-enforced account limits.", style=f"{COLOR_WARNING} italic"))
+    grid.add_row(Text("\nNOTE: Ceilings are local experiment tracking policies, NOT provider-enforced account limits.", style=f"{TEXT_SECONDARY} italic"))
 
-    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         grid,
         title=f"[{TEXT_PRIMARY}]BUDGET & USAGE LEDGER[/{TEXT_PRIMARY}]",
@@ -461,31 +467,31 @@ def build_dataset_validation_panel(is_focused: bool) -> Panel:
     grid.add_column("main", ratio=1)
 
     # 1. Source Knowledge Bases Status Table
-    kb_table = Table(title="Knowledge Base Sources (100% Immutable)", box=None, expand=True, header_style=f"bold {CYAN_HIGHLIGHT}")
+    kb_table = Table(title="Knowledge Base Sources (100% Immutable)", box=None, expand=True, header_style=f"bold {TEXT_PRIMARY}")
     kb_table.add_column("Knowledge Base", style=f"bold {TEXT_PRIMARY}", width=25)
     kb_table.add_column("Parsed Records", justify="right", width=16)
     kb_table.add_column("Integrity Hash", style=f"{TEXT_MUTED}", width=20)
     kb_table.add_column("Status", justify="center", width=8)
     kb_table.add_column("Coverage / Role", style=f"{TEXT_SECONDARY}")
 
-    kb_table.add_row("MSU General KB", "222 Q&A pairs", "138e6893a1d54f36...", f"[bold {COLOR_SUCCESS}]PASS[/]", "Campus, admissions, faculties, general policies")
-    kb_table.add_row("MSU Programmes KB", "2,810 Q&A pairs", "a46773fea196d8fe...", f"[bold {COLOR_SUCCESS}]PASS[/]", "Academic degrees, tuition fees, career outcomes")
+    kb_table.add_row("MSU General KB", "222 Q&A pairs", "138e6893a1d54f36...", f"[bold {TEXT_PRIMARY}]PASS[/]", "Campus, admissions, faculties, general policies")
+    kb_table.add_row("MSU Programmes KB", "2,810 Q&A pairs", "a46773fea196d8fe...", f"[bold {TEXT_PRIMARY}]PASS[/]", "Academic degrees, tuition fees, career outcomes")
     grid.add_row(kb_table)
 
     # 2. Defect Remediation Register Table
-    rem_table = Table(title="Audit Findings & Remediation Register", box=None, expand=True, header_style=f"bold {CYAN_HIGHLIGHT}")
-    rem_table.add_column("ID", style=f"bold {CYAN_HIGHLIGHT}", width=8)
+    rem_table = Table(title="Audit Findings & Remediation Register", box=None, expand=True, header_style=f"bold {TEXT_PRIMARY}")
+    rem_table.add_column("ID", style=f"bold {TEXT_PRIMARY}", width=8)
     rem_table.add_column("Programme", style=f"{TEXT_PRIMARY}", width=23)
     rem_table.add_column("Defect Type", style=f"{TEXT_MUTED}", width=21)
     rem_table.add_column("Action / Pipeline Status", justify="center", width=25)
     rem_table.add_column("Resolution Policy", style=f"{TEXT_SECONDARY} italic")
 
-    rem_table.add_row("REM-001", "Broadcasting (Hons)", "Mismatched Question", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected question to Broadcasting")
-    rem_table.add_row("REM-002", "Product Design (Hons)", "New Media Duration", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected duration question label")
-    rem_table.add_row("REM-003", "Master of Design", "TESL Question Tag", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected question tag to Master of Design")
-    rem_table.add_row("REM-004", "PhD Food Service Tech", "Applied Science Tag", f"[bold {COLOR_SUCCESS}]APPROVED FOR CLEAN COPY[/]", "Corrected question to Food Service Technology")
+    rem_table.add_row("REM-001", "Broadcasting (Hons)", "Mismatched Question", f"[bold {TEXT_PRIMARY}]APPROVED FOR CLEAN COPY[/]", "Corrected question to Broadcasting")
+    rem_table.add_row("REM-002", "Product Design (Hons)", "New Media Duration", f"[bold {TEXT_PRIMARY}]APPROVED FOR CLEAN COPY[/]", "Corrected duration question label")
+    rem_table.add_row("REM-003", "Master of Design", "TESL Question Tag", f"[bold {TEXT_PRIMARY}]APPROVED FOR CLEAN COPY[/]", "Corrected question tag to Master of Design")
+    rem_table.add_row("REM-004", "PhD Food Service Tech", "Applied Science Tag", f"[bold {TEXT_PRIMARY}]APPROVED FOR CLEAN COPY[/]", "Corrected question to Food Service Technology")
     rem_table.add_row("REM-005", "PhD Applied Science", "Contradictory Tuition", f"[bold {COLOR_WARNING}]OFFICIAL VERIF PENDING[/]", "RM62.5k vs RM63.5k — Zero arbitrary guessing")
-    rem_table.add_row("REM-006", "Multiple Programmes", "Duplicate Q&A Pairs", f"[bold {CYAN_HIGHLIGHT}]INVESTIGATION PENDING[/]", "Cross-programme comparison before merge")
+    rem_table.add_row("REM-006", "Multiple Programmes", "Duplicate Q&A Pairs", f"[bold {TEXT_PRIMARY}]INVESTIGATION PENDING[/]", "Cross-programme comparison before merge")
     rem_table.add_row("REM-007", "MBBS / General", "Time-Sensitive Intakes", f"[bold {COLOR_WARNING}]OFFICIAL VERIF PENDING[/]", "Verify dates against official 2026/27 calendar")
     rem_table.add_row("REM-008", "Education (TESL)", "MPU / MUET Standards", f"[bold {COLOR_ERROR}]KB OWNER ESCALATED[/]", "Escalate MPU subject & language requirements")
     grid.add_row(rem_table)
@@ -494,7 +500,7 @@ def build_dataset_validation_panel(is_focused: bool) -> Panel:
     note = Text("\nSAFETY INVARIANT: Original KBs remain immutable. Approved fixes write strictly to versioned copies (data/remediated/). Never benchmark models against known-bad KB records.", style=f"{TEXT_MUTED} italic")
     grid.add_row(note)
 
-    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         grid,
         title=f"[{TEXT_PRIMARY}]DATASET VALIDATION & REMEDIATION PIPELINE[/{TEXT_PRIMARY}]",
@@ -505,17 +511,16 @@ def build_dataset_validation_panel(is_focused: bool) -> Panel:
 
 
 def build_roadmap_panel(title_str: str, step_str: str, items: List[str], is_focused: bool) -> Panel:
-
     """Builds clean roadmap panel for upcoming roadmap steps."""
     t = Text()
     t.append("Component Status: ", style=f"{TEXT_SECONDARY}")
-    t.append(f"{step_str}\n\n", style=f"bold {COLOR_WARNING}")
+    t.append(f"{step_str}\n\n", style=f"bold {TEXT_PRIMARY}")
     t.append("Planned Deliverables:\n", style=f"bold {TEXT_PRIMARY}")
     for item in items:
         t.append(f"  • {item}\n", style=f"{TEXT_PRIMARY}")
     t.append("\nSafety Invariant: The workbench enforces strict fail-closed privacy. No fake data or untracked calls.", style=f"{TEXT_MUTED}")
 
-    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         t,
         title=f"[{TEXT_PRIMARY}]{title_str}[/{TEXT_PRIMARY}]",
@@ -527,17 +532,17 @@ def build_roadmap_panel(title_str: str, step_str: str, items: List[str], is_focu
 
 def build_health_main_panel(health_items: List[HealthCheckItem], is_focused: bool) -> Panel:
     """Builds the main panel when Project Health is selected."""
-    table = Table(box=None, expand=True, padding=(0, 1), show_header=True, header_style=f"bold {CYAN_HIGHLIGHT}")
+    table = Table(box=None, expand=True, padding=(0, 1), show_header=True, header_style=f"bold {TEXT_PRIMARY}")
     table.add_column("Component", style=f"bold {TEXT_PRIMARY}", width=22)
     table.add_column("Status", justify="center", width=8)
-    table.add_column("Details", style=f"{CYAN_HIGHLIGHT}")
+    table.add_column("Details", style=f"{TEXT_PRIMARY}")
     table.add_column("Notes", style=f"{TEXT_MUTED} italic")
 
     for item in health_items:
-        badge = f"[bold {COLOR_SUCCESS}]PASS[/]" if item.status == "PASS" else (f"[bold {COLOR_WARNING}]WARN[/]" if item.status == "WARN" else f"[bold {COLOR_ERROR}]FAIL[/]")
+        badge = f"[bold {TEXT_PRIMARY}]PASS[/]" if item.status == "PASS" else (f"[bold {COLOR_WARNING}]WARN[/]" if item.status == "WARN" else f"[bold {COLOR_ERROR}]FAIL[/]")
         table.add_row(item.component, badge, item.details, item.note)
 
-    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         table,
         title=f"[{TEXT_PRIMARY}]PROJECT HEALTH DIAGNOSTICS[/{TEXT_PRIMARY}]",
@@ -550,11 +555,11 @@ def build_health_main_panel(health_items: List[HealthCheckItem], is_focused: boo
 def build_settings_main_panel(is_focused: bool) -> Panel:
     """Builds the Settings view."""
     t = Text()
-    t.append("Workbench Configuration & Paths:\n\n", style=f"bold {CYAN_HIGHLIGHT}")
+    t.append("Workbench Configuration & Paths:\n\n", style=f"bold {TEXT_PRIMARY}")
     t.append("  App Name:          ", style=f"{TEXT_SECONDARY}")
     t.append("msu-llm-lab\n", style=f"{TEXT_PRIMARY}")
     t.append("  Execution Mode:    ", style=f"{TEXT_SECONDARY}")
-    t.append("DRY-RUN (Locked)\n", style=f"bold {COLOR_SUCCESS}")
+    t.append("DRY-RUN (Locked)\n", style=f"bold {TEXT_PRIMARY}")
     t.append("  Database Path:     ", style=f"{TEXT_SECONDARY}")
     t.append("data/workbench.db (SQLite WAL)\n", style=f"{TEXT_PRIMARY}")
     t.append("  Reports Directory: ", style=f"{TEXT_SECONDARY}")
@@ -565,7 +570,7 @@ def build_settings_main_panel(is_focused: bool) -> Panel:
     t.append("[EXCLUDED] OPENROUTER_API_KEY loaded via env only\n\n", style=f"dim {COLOR_WARNING}")
     t.append("Press 'r' to reload configuration from disk.", style=f"{TEXT_MUTED}")
 
-    border = BORDER_FOCUSED if is_focused else BORDER_TEAL
+    border = BORDER_FOCUSED if is_focused else BORDER_CHARCOAL
     return Panel(
         t,
         title=f"[{TEXT_PRIMARY}]SETTINGS & CONFIGURATION[/{TEXT_PRIMARY}]",
@@ -582,7 +587,7 @@ def build_help_main_panel() -> Panel:
     grid.add_column("col2", ratio=1)
 
     t1 = Text()
-    t1.append("Navigation & Controls:\n", style=f"bold {CYAN_HIGHLIGHT}")
+    t1.append("Navigation & Controls:\n", style=f"bold {TEXT_PRIMARY}")
     t1.append("  ↑ / k           Move selection up\n", style=f"{TEXT_PRIMARY}")
     t1.append("  ↓ / j           Move selection down\n", style=f"{TEXT_PRIMARY}")
     t1.append("  Tab             Switch active pane (Nav ↔ Main)\n", style=f"{TEXT_PRIMARY}")
@@ -596,7 +601,7 @@ def build_help_main_panel() -> Panel:
     t1.append("  q               Quit application cleanly\n", style=f"{TEXT_PRIMARY}")
 
     t2 = Text()
-    t2.append("Interactive Commands (:):\n", style=f"bold {CYAN_HIGHLIGHT}")
+    t2.append("Interactive Commands (:):\n", style=f"bold {TEXT_PRIMARY}")
     t2.append("  :models, :m     Switch to Model Catalogue\n", style=f"{TEXT_PRIMARY}")
     t2.append("  :budget, :b     Switch to Budget & Usage\n", style=f"{TEXT_PRIMARY}")
     t2.append("  :dataset, :d    Switch to Dataset Validation\n", style=f"{TEXT_PRIMARY}")
@@ -626,20 +631,20 @@ def build_help_main_panel() -> Panel:
 def build_recent_logs_panel(log_buffer: LogBuffer) -> Panel:
     """Builds the bottom-left RECENT LOGS panel."""
     grid = Table.grid(expand=True, padding=(0, 0))
-    grid.add_column("ts", width=11, style=f"{TEXT_MUTED}")
+    grid.add_column("ts", width=12, style=f"{TEXT_SECONDARY}")
     grid.add_column("level", width=6)
     grid.add_column("msg", style=f"{TEXT_PRIMARY}")
 
     logs = log_buffer.get_recent(6)
     for ts, level, msg in logs:
-        lvl_style = f"bold {COLOR_SUCCESS}" if level == "INFO" else (f"bold {COLOR_WARNING}" if level == "WARN" else f"bold {COLOR_ERROR}")
+        lvl_style = f"bold {TEXT_PRIMARY}" if level == "INFO" else (f"bold {COLOR_WARNING}" if level == "WARN" else f"bold {COLOR_ERROR}")
         grid.add_row(f"[{ts}]", Text(level, style=lvl_style), msg)
 
     return Panel(
         grid,
         title=f"[{TEXT_PRIMARY}]RECENT LOGS[/{TEXT_PRIMARY}]",
         title_align="left",
-        border_style=BORDER_TEAL,
+        border_style=BORDER_CHARCOAL,
         padding=(0, 1),
     )
 
@@ -661,17 +666,17 @@ def build_budget_usage_bottom_panel(status: BudgetStatus) -> Panel:
     t_line.add_row(
         Text("Total Budget", style=f"{TEXT_SECONDARY}"),
         Text(f"${total_spent:.2f} / ${total_ceiling:.2f}", style=f"{TEXT_PRIMARY}"),
-        Text(f"{total_pct}%", style=f"bold {CYAN_HIGHLIGHT}"),
+        Text(f"{total_pct}%", style=f"bold {TEXT_PRIMARY}"),
     )
     grid.add_row(t_line)
 
-    # Progress bar total
+    # Progress bar total matching reference monochrome bar
     bar_len = 46
     filled_total = int((total_pct / 100) * bar_len)
     total_bar = Text()
     total_bar.append("[", style=f"{TEXT_MUTED}")
-    total_bar.append("█" * filled_total, style=f"{CYAN_HIGHLIGHT}")
-    total_bar.append("░" * (bar_len - filled_total), style=f"{BORDER_TEAL}")
+    total_bar.append("█" * filled_total, style=f"{TEXT_PRIMARY}")
+    total_bar.append(" " * (bar_len - filled_total), style="on #242424")
     total_bar.append("]", style=f"{TEXT_MUTED}")
     grid.add_row(total_bar)
 
@@ -689,7 +694,7 @@ def build_budget_usage_bottom_panel(status: BudgetStatus) -> Panel:
     p_line.add_row(
         Text("Pilot Budget", style=f"{TEXT_SECONDARY}"),
         Text(f"${pilot_spent:.2f} / ${pilot_ceiling:.2f}", style=f"{TEXT_PRIMARY}"),
-        Text(f"{pilot_pct}%", style=f"bold {CYAN_HIGHLIGHT}"),
+        Text(f"{pilot_pct}%", style=f"bold {TEXT_PRIMARY}"),
     )
     grid.add_row(p_line)
 
@@ -697,8 +702,8 @@ def build_budget_usage_bottom_panel(status: BudgetStatus) -> Panel:
     filled_pilot = int((pilot_pct / 100) * bar_len)
     pilot_bar = Text()
     pilot_bar.append("[", style=f"{TEXT_MUTED}")
-    pilot_bar.append("█" * filled_pilot, style=f"{COLOR_SUCCESS}")
-    pilot_bar.append("░" * (bar_len - filled_pilot), style=f"{BORDER_TEAL}")
+    pilot_bar.append("█" * filled_pilot, style=f"{TEXT_PRIMARY}")
+    pilot_bar.append(" " * (bar_len - filled_pilot), style="on #242424")
     pilot_bar.append("]", style=f"{TEXT_MUTED}")
     grid.add_row(pilot_bar)
 
@@ -706,7 +711,7 @@ def build_budget_usage_bottom_panel(status: BudgetStatus) -> Panel:
         grid,
         title=f"[{TEXT_PRIMARY}]BUDGET USAGE[/{TEXT_PRIMARY}]",
         title_align="left",
-        border_style=BORDER_TEAL,
+        border_style=BORDER_CHARCOAL,
         padding=(0, 1),
     )
 
@@ -717,17 +722,17 @@ def build_datasets_bottom_panel() -> Panel:
     grid.add_column("k", style=f"{TEXT_SECONDARY}", width=12)
     grid.add_column("v")
 
-    grid.add_row("Status:", Text("NOT IMPLEMENTED", style=f"bold {COLOR_WARNING}"))
+    grid.add_row("Status:", Text("NOT IMPLEMENTED", style=f"bold {TEXT_SECONDARY}"))
     grid.add_row("Cases:", Text("-", style=f"{TEXT_MUTED}"))
     grid.add_row("Versions:", Text("-", style=f"{TEXT_MUTED}"))
     grid.add_row("Privacy:", Text("-", style=f"{TEXT_MUTED}"))
-    grid.add_row("Next Step:", Text("Add evaluation datasets (Step 2)", style=f"{CYAN_HIGHLIGHT}"))
+    grid.add_row("Next Step:", Text("Add evaluation datasets (Step 2)", style=f"{TEXT_PRIMARY}"))
 
     return Panel(
         grid,
         title=f"[{TEXT_PRIMARY}]DATASETS[/{TEXT_PRIMARY}]",
         title_align="left",
-        border_style=BORDER_TEAL,
+        border_style=BORDER_CHARCOAL,
         padding=(0, 1),
     )
 
@@ -740,27 +745,27 @@ def build_command_bar(
 ) -> Panel:
     """Builds the command input bar."""
     line = Text()
-    line.append("command > ", style=f"bold {CYAN_HIGHLIGHT}")
+    line.append("msu-llm-lab > ", style=f"bold {TEXT_PRIMARY}")
 
     if mode in ("COMMAND", "SEARCH"):
         prefix = ":" if mode == "COMMAND" else "/"
-        line.append(prefix, style=f"bold {CYAN_HIGHLIGHT}")
+        line.append(prefix, style=f"bold {TEXT_PRIMARY}")
         line.append(text_buffer[:cursor_pos], style=f"{TEXT_PRIMARY}")
         cursor_char = text_buffer[cursor_pos] if cursor_pos < len(text_buffer) else " "
-        line.append(cursor_char, style=f"#080F14 on {CYAN_HIGHLIGHT}")
+        line.append(cursor_char, style=f"#1C1C1C on {TEXT_PRIMARY}")
         line.append(text_buffer[cursor_pos + 1:], style=f"{TEXT_PRIMARY}")
     else:
         if text_buffer:
             line.append(text_buffer, style=f"{TEXT_PRIMARY}")
-        line.append("█", style=f"{CYAN_HIGHLIGHT}")
+        line.append("█", style=f"{TEXT_PRIMARY}")
 
     if feedback:
         line.append("   │   ", style=f"{TEXT_MUTED}")
-        line.append(feedback, style=f"bold {COLOR_WARNING}")
+        line.append(feedback, style=f"{TEXT_SECONDARY}")
 
     return Panel(
         line,
-        border_style=BORDER_FOCUSED if mode in ("COMMAND", "SEARCH") else BORDER_TEAL,
+        border_style=BORDER_FOCUSED if mode in ("COMMAND", "SEARCH") else BORDER_CHARCOAL,
         padding=(0, 1),
     )
 
@@ -772,30 +777,30 @@ def build_footer_bar(status: BudgetStatus) -> Table:
     grid.add_column("right", justify="right", ratio=4)
 
     left = Text()
-    left.append("↑/↓ ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append("↑/↓ ", style=f"bold {TEXT_PRIMARY}")
     left.append("Navigate   ", style=f"{TEXT_SECONDARY}")
-    left.append("Enter ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append("Enter ", style=f"bold {TEXT_PRIMARY}")
     left.append("Select   ", style=f"{TEXT_SECONDARY}")
-    left.append("/ ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append("/ ", style=f"bold {TEXT_PRIMARY}")
     left.append("Search   ", style=f"{TEXT_SECONDARY}")
-    left.append(": ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append(": ", style=f"bold {TEXT_PRIMARY}")
     left.append("Command Mode   ", style=f"{TEXT_SECONDARY}")
-    left.append("Tab ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append("Tab ", style=f"bold {TEXT_PRIMARY}")
     left.append("Next Pane   ", style=f"{TEXT_SECONDARY}")
-    left.append("r ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append("r ", style=f"bold {TEXT_PRIMARY}")
     left.append("Refresh   ", style=f"{TEXT_SECONDARY}")
-    left.append("? ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append("? ", style=f"bold {TEXT_PRIMARY}")
     left.append("Help   ", style=f"{TEXT_SECONDARY}")
-    left.append("q ", style=f"bold {CYAN_HIGHLIGHT}")
+    left.append("q ", style=f"bold {TEXT_PRIMARY}")
     left.append("Quit", style=f"{TEXT_SECONDARY}")
 
     right = Text()
-    right.append("Dry-run", style=f"bold {COLOR_SUCCESS}")
-    right.append(" │ ", style=f"{TEXT_MUTED}")
+    right.append("Dry-run", style=f"bold {TEXT_PRIMARY}")
+    right.append("  |  ", style=f"{TEXT_MUTED}")
     right.append("No API calls", style=f"{TEXT_SECONDARY}")
-    right.append(" │ ", style=f"{TEXT_MUTED}")
-    right.append(f"Budget: ${status.remaining_total_usd:.2f}", style=f"bold {CYAN_HIGHLIGHT}")
-    right.append(" │ ", style=f"{TEXT_MUTED}")
+    right.append("  |  ", style=f"{TEXT_MUTED}")
+    right.append(f"Budget: ${status.remaining_total_usd:.2f}", style=f"bold {TEXT_PRIMARY}")
+    right.append("  |  ", style=f"{TEXT_MUTED}")
     right.append("DB: SQLite WAL", style=f"{TEXT_SECONDARY}")
 
     grid.add_row(left, right)
@@ -876,8 +881,8 @@ def build_help_panel() -> Panel:
 
 def build_status_bar(status: BudgetStatus, feedback: str = "") -> Panel:
     return Panel(
-        Text(f"STATUS: Dry-run active │ Budget: ${status.remaining_total_usd:.2f} │ {feedback}", style=f"bold {CYAN_HIGHLIGHT}"),
-        border_style=BORDER_TEAL,
+        Text(f"STATUS: Dry-run active │ Budget: ${status.remaining_total_usd:.2f} │ {feedback}", style=f"bold {TEXT_PRIMARY}"),
+        border_style=BORDER_CHARCOAL,
         padding=(0, 1),
     )
 
