@@ -184,7 +184,7 @@ def test_panel_renderers():
     console.print(models_panel)
     out_models = console.file.getvalue()
     assert "MODEL CATALOGUE" in out_models
-    assert "google/gemini-flash-1.5" in out_models
+    assert "google/gemini-3.5-flash-lite" in out_models
     assert "UNVERIFIED" in out_models
     assert "live provider" in out_models
 
