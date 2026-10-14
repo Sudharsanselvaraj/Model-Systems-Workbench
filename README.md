@@ -64,7 +64,8 @@ uv run msu-llm-lab
 ```
 
 <p align="center">
-  <img src="assets/readme/cli_welcome.png" alt="MSU LLM Workbench CLI Launcher" width="920" />
+  <img src="assets/readme/welcome_header.png" alt="MSU LLM Workbench CLI Launcher - Logo & Telemetry" width="940" />
+  <img src="assets/readme/welcome_menu.png" alt="MSU LLM Workbench CLI Launcher - Workflow Menu" width="940" />
 </p>
 
 Use arrow keys (`↑`/`↓`) or number shortcuts (`1`–`9`) to navigate workflows, run audits, trigger benchmarks, or launch the live dashboard.
