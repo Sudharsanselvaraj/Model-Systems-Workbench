@@ -9,7 +9,7 @@ The local-first framework for evaluating the language models behind a university
 <br />
 
 ![Python](https://img.shields.io/badge/python-3.11+-1C1C1C?style=flat-square&logo=python&logoColor=D0D0D0)
-![Phase](https://img.shields.io/badge/phase-4_complete-1C1C1C?style=flat-square)
+![Phase](https://img.shields.io/badge/phase-5_complete-1C1C1C?style=flat-square)
 ![Network](https://img.shields.io/badge/network-offline-1C1C1C?style=flat-square)
 ![Spend](https://img.shields.io/badge/spend-$0.00-1C1C1C?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-pytest-1C1C1C?style=flat-square&logo=pytest&logoColor=D0D0D0)
@@ -99,6 +99,16 @@ uv run msu-llm-lab compare-runs run_20261014_055031_da1ff1 run_20261014_055035_0
 uv run msu-llm-lab import-traces data/traces/synthetic_langfuse_traces.json --output-dir reports/
 ```
 
+### Decoupled RAG benchmarking & model comparison
+
+```bash
+# Benchmark candidate model on isolated retrieval and generation metrics
+uv run msu-llm-lab benchmark-rag --model google/gemini-3.5-flash-lite --split TEST --retriever bm25 --dry-run
+
+# Side-by-side comparison isolating retriever from model generation quality
+uv run msu-llm-lab benchmark-rag --model google/gemini-3.5-flash-lite --compare-with anthropic/claude-haiku-5.5 --split TEST --retriever perfect --dry-run
+```
+
 ---
 
 ## How it works
@@ -161,6 +171,7 @@ The system never silently picks a number. If two facts disagree, a human decides
 | `msu-llm-lab validate-dataset <file>` | Check evaluation cases for confidentiality labels and split leakage |
 | `msu-llm-lab benchmark [options]` | Benchmark candidate models with rubric scoring and budget ledger recording |
 | `msu-llm-lab compare-runs <run_a> <run_b>` | Compare two benchmark runs side-by-side with metric and latency deltas |
+| `msu-llm-lab benchmark-rag [options]` | Decoupled RAG benchmark: isolated retrieval, generation, and failure attribution |
 | `msu-llm-lab import-traces <file>` | Ingest Langfuse traces to diagnose routing, retrieval, generation, or KB defects |
 | `msu-llm-lab budget status` | Spend against pilot, total, per-run and per-case ceilings |
 | `msu-llm-lab models list` | Candidate model portfolio from the local database |
@@ -224,8 +235,8 @@ All entries are `UNVERIFIED_CATALOG_ENTRY`: planning baselines with preliminary 
 | 2 | Evaluation schemas, confidentiality gate, splits, n-gram leakage detector | Done |
 | 3 | OpenRouter provider with retry and backoff, secret scrubbing, dry-run mode, model comparison | Done |
 | 4 | Redacted Langfuse trace ingestion and failure classification (routing, retrieval, generation, KB) | Done |
-| 5 | LoRA / QLoRA feasibility and GPU sizing | Next |
-| 6 | vLLM benchmarks: TTFT, throughput and KV-cache pressure at 1, 5, 10 and 25 concurrent users | Planned |
+| 5 | End-to-end RAG benchmarking and decoupled model evaluation | Done |
+| 6 | Inference serving & vLLM concurrency benchmark proposals | Next |
 | 7 | Research dashboard with latency-versus-quality frontiers | Planned |
 
 Detailed acceptance criteria live in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
@@ -243,11 +254,12 @@ src/msu_llm_lab/
 ├── dataset/            # evaluation cases, leakage detector, partitions
 ├── providers/          # BaseProvider, OpenRouter adapter, secret scrubber
 ├── evaluation/         # rubric evaluator, benchmark runner, SQLite storage
+├── rag/                # decoupled retrievers, RAG evaluator, runner
 ├── traces/             # Langfuse importer, diagnostic analyzer, reporter
 ├── storage/            # SQLite manager (ledger, runs, model portfolio)
 ├── models/             # candidate model catalog
 └── tui/                # app loop, screens, health, telemetry, theme
-tests/                  # audit, budget, remediation, dataset, providers, traces, TUI
+tests/                  # audit, budget, remediation, dataset, providers, rag, traces, TUI
 docs/                   # architecture, implementation plan, project map
 ```
 
