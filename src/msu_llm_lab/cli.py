@@ -215,6 +215,87 @@ def audit_kb(
 
 
 # ---------------------------------------------------------------------------
+# Knowledge Base Remediation Subsystem (Step 2)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="remediate-kb")
+def remediate_kb(
+    file_path: Path = typer.Argument(
+        Path("Copy of MSU Programmes KB - Local - Sudharsan.md"),
+        help="Path to the source knowledge base Markdown file.",
+        exists=True,
+        file_okay=True,
+        dir_okay=False,
+        readable=True,
+    ),
+    output_path: Optional[Path] = typer.Option(
+        None,
+        "--output",
+        "-o",
+        help="Destination path for versioned clean copy (e.g., data/remediated/MSU_Programmes_KB_v1.1_clean.md).",
+    ),
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Write remediated clean copy to output destination. Defaults to dry-run.",
+    ),
+) -> None:
+    """Inspect defect findings, evaluate remediation rules, and produce versioned clean copies."""
+    from msu_llm_lab.remediation.engine import RemediationEngine
+    from msu_llm_lab.remediation.models import RemediationStatus
+
+    console.print(Panel(f"[bold cyan]MSU Knowledge Base Remediation Engine[/bold cyan]: {file_path.name}", expand=False))
+    console.print("[yellow]SAFETY INVARIANT: Original knowledge-base source files remain 100% read-only and immutable.[/yellow]\n")
+
+    engine = RemediationEngine(file_path)
+    dry_run = not apply
+
+    target_out = output_path or Path("data/remediated") / f"{file_path.stem}_v1.1_clean.md"
+    report, _ = engine.execute_remediation(output_path=target_out if apply else None, dry_run=dry_run)
+
+    # 1. Findings Overview Table
+    table = Table(title="Remediation Findings & Action Classification", show_header=True, header_style="bold magenta")
+    table.add_column("ID", style="bold cyan", width=9)
+    table.add_column("Programme", style="white", width=26)
+    table.add_column("Classification", style="dim", width=22)
+    table.add_column("Status", justify="center", width=24)
+    table.add_column("Action / Resolution", style="italic")
+
+    status_styles = {
+        RemediationStatus.APPROVED_FOR_RELEASE: "[bold green]APPROVED_FOR_RELEASE[/bold green]",
+        RemediationStatus.APPLIED: "[bold green]APPLIED (CLEAN COPY)[/bold green]",
+        RemediationStatus.OFFICIAL_VERIFICATION_PENDING: "[bold yellow]OFFICIAL_VERIF_PENDING[/bold yellow]",
+        RemediationStatus.INVESTIGATION_PENDING: "[bold cyan]INVESTIGATION_PENDING[/bold cyan]",
+        RemediationStatus.KB_OWNER_ESCALATED: "[bold magenta]KB_OWNER_ESCALATED[/bold magenta]",
+    }
+
+    for f in report.findings:
+        st_label = status_styles.get(f.status, str(f.status.value))
+        table.add_row(f.finding_id, f.programme_name[:26], f.classification.value, st_label, f.resolution_notes or f.issue_title)
+
+    console.print(table)
+
+    # 2. Summary Card
+    mode_text = "[bold green]LIVE VERSIONED WRITE[/bold green]" if apply else "[bold yellow]DRY-RUN (In-Memory Evaluation)[/bold yellow]"
+    summary_card = (
+        f"Execution Mode:       {mode_text}\n"
+        f"Source SHA-256:       {report.sha256_original[:16]}... (Verified 100% Immutable)\n"
+        f"Total Findings:       {report.total_findings}\n"
+        f"Approved for Clean:   {report.approved_count} (Confirmed Content Defects)\n"
+        f"Official Verif Req:   {report.pending_official_verification_count} (Contradictory Fees / Intakes — Zero Guessing)\n"
+        f"KB Owner Escalations: {report.escalated_kb_owner_count} (Curriculum / Language Standards)\n"
+    )
+    if apply and output_path:
+        summary_card += f"Output Destination:   {target_out}\nRemediated SHA-256:   {report.sha256_remediated[:16]}...\n"
+    elif dry_run:
+        summary_card += f"\n[dim]Run with '--apply --output {target_out}' to generate versioned clean copy.[/dim]"
+
+    console.print(Panel(summary_card, title="[bold]Remediation Execution Summary[/bold]", border_style="cyan"))
+
+
+
+# ---------------------------------------------------------------------------
 # Budget Subcommands
 # ---------------------------------------------------------------------------
 
