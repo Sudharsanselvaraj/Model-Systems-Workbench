@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/Lavender%20Branching%20Tech%20Panels.png" alt="MSU LLM Workbench logo" width="160" />
+<img src="assets/Lavender%20Branching%20Tech%20Panels.png" alt="MSU LLM Workbench logo" width="200" />
 
 # MSU LLM Workbench
 
@@ -9,12 +9,10 @@
 A local-first research lab for auditing RAG knowledge bases, benchmarking retrieval and generation separately, diagnosing production traces, and sizing self-hosted vLLM serving, all under a hard spend ceiling.
 
 <p>
-  <a href="https://github.com/Sudharsanselvaraj/Model-Systems-Workbench/stargazers"><img src="https://img.shields.io/github/stars/Sudharsanselvaraj/Model-Systems-Workbench?style=for-the-badge&logo=github&color=c084fc&labelColor=1e1b2e" alt="Stars"></a>
-  <img src="https://img.shields.io/badge/python-3.11+-1e1b2e?style=for-the-badge&logo=python&logoColor=c084fc" alt="Python 3.11+">
-  <img src="https://img.shields.io/badge/license-Apache%202.0-1e1b2e?style=for-the-badge&logoColor=c084fc" alt="Apache 2.0">
-  <img src="https://img.shields.io/badge/status-alpha-1e1b2e?style=for-the-badge&color=a78bfa" alt="Status: alpha">
-  <img src="https://img.shields.io/badge/runs-offline%20by%20default-1e1b2e?style=for-the-badge&logoColor=38bdf8" alt="Offline by default">
-  <img src="https://img.shields.io/badge/built%20with-Typer%20%C2%B7%20Pydantic%20%C2%B7%20Rich-1e1b2e?style=for-the-badge" alt="Typer, Pydantic, Rich">
+  <img src="https://img.shields.io/badge/python-3.11%2B-a78bfa?style=flat-square&labelColor=1e1b2e" alt="Python 3.11+">
+  <img src="https://img.shields.io/badge/license-Apache%202.0-a78bfa?style=flat-square&labelColor=1e1b2e" alt="Apache 2.0">
+  <img src="https://img.shields.io/badge/status-alpha-a78bfa?style=flat-square&labelColor=1e1b2e" alt="Alpha">
+  <img src="https://img.shields.io/badge/mode-offline%20by%20default-a78bfa?style=flat-square&labelColor=1e1b2e" alt="Offline by default">
 </p>
 
 <p>
@@ -126,40 +124,12 @@ uv run msu-llm-lab ui
 ## How it works
 
 ```mermaid
-flowchart TD
-    subgraph KB["1 · Source knowledge bases (immutable)"]
-        G["General KB"]
-        P["Programmes KB"]
-    end
-
-    subgraph Audit["2 · Deterministic audit and remediation"]
-        Parse["Parser"] --> Validate["Validators"] --> Fix["Remediation engine<br/>SHA-256 verified"]
-    end
-
-    subgraph Data["3 · Dataset isolation"]
-        Clean[("Clean corpus")]
-        Golden["Golden benchmark<br/>TRAIN / DEV / TEST"]
-        Gate{"Leakage and<br/>confidentiality gate"}
-    end
-
-    subgraph Eval["4 · Evaluation and serving"]
-        RAG["Decoupled RAG benchmark<br/>BM25 vs perfect retriever"]
-        Models["Model comparison"]
-        Traces["Trace diagnostics"]
-        Serve["vLLM serving simulator"]
-        Ledger[("SQLite budget ledger")]
-    end
-
-    G --> Parse
-    P --> Parse
-    Fix --> Clean --> RAG
-    Clean --> Golden --> Gate --> RAG
-    RAG --> Models --> Ledger
-    Traces --> RAG
-    Serve --> Ledger
+flowchart LR
+    A["Source KBs<br/>(read-only)"] --> B["Audit &<br/>remediate"] --> C["Clean corpus &<br/>eval sets"] --> D["RAG & model<br/>benchmarks"] --> E["Serving<br/>sizing"]
+    F["Budget ledger<br/>+ confidentiality gate"] -.guards.-> D
 ```
 
-Everything runs against local markdown/JSONL files and a SQLite database in WAL mode. Deeper diagrams and sequence flows: [`docs/CURRENT_ARCHITECTURE.md`](docs/CURRENT_ARCHITECTURE.md) and [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
+Everything runs on local markdown/JSONL files and SQLite. Full diagrams: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
 ---
 
@@ -372,16 +342,7 @@ uv run pytest
 
 The suite has 95 tests. **8 of them rely on the confidential KB and trace fixtures that are git-ignored**, so on a clean public clone expect 87 passing and 8 failing until you add your own files under the paths the tests read (`data/traces/…`, `Copy of MSU Programmes KB - Local - Sudharsan.md`).
 
-## Contributing
-
-Issues and pull requests are welcome. For anything non-trivial, open an issue first. Please keep these invariants intact: sources stay immutable, the default path stays offline, and any new provider code must go through the confidentiality gate and the budget ledger.
-
 ## License
 
 Apache 2.0. See [`LICENSE`](LICENSE).
 
-<div align="center">
-
-If this saved you from swapping models for the wrong reason, a ⭐ helps others find it.
-
-</div>
