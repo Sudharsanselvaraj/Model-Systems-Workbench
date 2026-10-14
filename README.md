@@ -9,7 +9,7 @@ The local-first framework for evaluating the language models behind a university
 <br />
 
 ![Python](https://img.shields.io/badge/python-3.11+-1C1C1C?style=flat-square&logo=python&logoColor=D0D0D0)
-![Phase](https://img.shields.io/badge/phase-2_complete-1C1C1C?style=flat-square)
+![Phase](https://img.shields.io/badge/phase-3_complete-1C1C1C?style=flat-square)
 ![Network](https://img.shields.io/badge/network-offline-1C1C1C?style=flat-square)
 ![Spend](https://img.shields.io/badge/spend-$0.00-1C1C1C?style=flat-square)
 ![Tests](https://img.shields.io/badge/tests-pytest-1C1C1C?style=flat-square&logo=pytest&logoColor=D0D0D0)
@@ -82,6 +82,16 @@ uv run msu-llm-lab remediate-kb "path/to/kb.md" \
 uv run msu-llm-lab validate-dataset data/evaluation/synthetic_seed_eval.jsonl
 ```
 
+### Benchmark candidate models (deterministic dry-run)
+
+```bash
+# Evaluate candidate with rubric scoring and spend ledger updates
+uv run msu-llm-lab benchmark --model google/gemini-3.5-flash-lite --split TEST --dry-run
+
+# Compare two evaluation runs side-by-side with metric deltas
+uv run msu-llm-lab compare-runs run_20261014_055031_da1ff1 run_20261014_055035_09e354
+```
+
 ---
 
 ## How it works
@@ -142,6 +152,8 @@ The system never silently picks a number. If two facts disagree, a human decides
 | `msu-llm-lab audit-kb <file>` | Audit a KB. `--dry-run` for a summary only, `--output-dir` for CSV and Markdown reports |
 | `msu-llm-lab remediate-kb <file>` | Preview or apply confirmed fixes. `--apply --output <path>` writes a versioned copy |
 | `msu-llm-lab validate-dataset <file>` | Check evaluation cases for confidentiality labels and split leakage |
+| `msu-llm-lab benchmark [options]` | Benchmark candidate models with rubric scoring and budget ledger recording |
+| `msu-llm-lab compare-runs <run_a> <run_b>` | Compare two benchmark runs side-by-side with metric and latency deltas |
 | `msu-llm-lab budget status` | Spend against pilot, total, per-run and per-case ceilings |
 | `msu-llm-lab models list` | Candidate model portfolio from the local database |
 
@@ -202,8 +214,8 @@ All entries are `UNVERIFIED_CATALOG_ENTRY`: planning baselines with preliminary 
 | 0 | Discovery and architecture | Done |
 | 1 | KB audit, remediation, budget ledger, model catalog, TUI | Done |
 | 2 | Evaluation schemas, confidentiality gate, splits, n-gram leakage detector | Done |
-| 3 | OpenRouter provider with retry and backoff, secret scrubbing, dry-run mode, model comparison | Next |
-| 4 | Redacted Langfuse trace ingestion and failure classification (routing, retrieval, generation, KB) | Planned |
+| 3 | OpenRouter provider with retry and backoff, secret scrubbing, dry-run mode, model comparison | Done |
+| 4 | Redacted Langfuse trace ingestion and failure classification (routing, retrieval, generation, KB) | Next |
 | 5 | LoRA / QLoRA feasibility and GPU sizing | Planned |
 | 6 | vLLM benchmarks: TTFT, throughput and KV-cache pressure at 1, 5, 10 and 25 concurrent users | Planned |
 | 7 | Research dashboard with latency-versus-quality frontiers | Planned |
@@ -219,11 +231,14 @@ src/msu_llm_lab/
 ├── cli.py              # Typer entry point
 ├── audit/              # parser, validator, reporter, issue models
 ├── remediation/        # engine, curated findings registry, models
-├── core/               # config and budget policy, budget service
-├── storage/            # SQLite manager (ledger and model portfolio)
+├── core/               # config, budget policy and preflight limits
+├── dataset/            # evaluation cases, leakage detector, partitions
+├── providers/          # BaseProvider, OpenRouter adapter, secret scrubber
+├── evaluation/         # rubric evaluator, benchmark runner, SQLite storage
+├── storage/            # SQLite manager (ledger, runs, model portfolio)
 ├── models/             # candidate model catalog
 └── tui/                # app loop, screens, health, telemetry, theme
-tests/                  # audit, budget, remediation, TUI
+tests/                  # audit, budget, remediation, dataset, providers, TUI
 docs/                   # architecture, implementation plan, project map
 ```
 
