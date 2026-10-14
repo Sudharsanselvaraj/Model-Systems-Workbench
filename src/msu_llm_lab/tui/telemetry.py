@@ -14,9 +14,11 @@ class SystemTelemetry:
 
     def __init__(self, history_len: int = 60) -> None:
         self.history_len = history_len
-        self.cpu_history: Deque[float] = deque([18.0] * 12, maxlen=history_len)
-        self.mem_history: Deque[float] = deque([17.0] * 12, maxlen=history_len)
-        self.disk_history: Deque[float] = deque([82.0] * 12, maxlen=history_len)
+        initial_cpu = [14.0, 15.0, 16.0, 18.0, 22.0, 28.0, 32.0, 26.0, 22.0, 18.0, 16.0, 18.0,
+                       20.0, 24.0, 28.0, 32.0, 26.0, 22.0, 20.0, 18.0, 21.0, 23.0, 20.0, 22.0]
+        self.cpu_history: Deque[float] = deque(initial_cpu, maxlen=history_len)
+        self.mem_history: Deque[float] = deque([5.0] * 24, maxlen=history_len)
+        self.disk_history: Deque[float] = deque([87.0] * 24, maxlen=history_len)
         self.cores = os.cpu_count() or 4
         self.last_update = time.time()
 
