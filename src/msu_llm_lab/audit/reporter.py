@@ -1,6 +1,5 @@
-"""Report generator for KB audit issues (CSV and Markdown formats)."""
-
 import csv
+import json
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict
@@ -10,7 +9,7 @@ from msu_llm_lab.audit.models import AuditIssue, AuditSummary, IssueSeverity
 
 
 class KBReporter:
-    """Generates machine-readable CSV logs and readable Markdown summaries."""
+    """Generates machine-readable CSV logs, JSONL records, and readable Markdown summaries."""
 
     def __init__(self, summary: AuditSummary, issues: List[AuditIssue], output_dir: Path):
         self.summary = summary
@@ -24,9 +23,11 @@ class KBReporter:
         fieldnames = [
             "issue_id",
             "source_file",
+            "record_id",
             "start_line",
             "end_line",
             "severity",
+            "status",
             "category",
             "issue_code",
             "programme",
@@ -43,9 +44,11 @@ class KBReporter:
                 writer.writerow({
                     "issue_id": issue.issue_id,
                     "source_file": Path(issue.source_file).name,
+                    "record_id": issue.record_id or f"L{issue.start_line}-L{issue.end_line}",
                     "start_line": issue.start_line,
                     "end_line": issue.end_line,
                     "severity": issue.severity.value,
+                    "status": issue.status.value,
                     "category": issue.category.value,
                     "issue_code": issue.issue_code,
                     "programme": issue.programme,
@@ -55,6 +58,34 @@ class KBReporter:
                     "requires_human_verification": "YES" if issue.requires_human_verification else "NO",
                 })
         return csv_path
+
+    def export_jsonl(self, filename: str) -> Path:
+        """Exports audit findings in machine-readable JSONL format."""
+        jsonl_path = self.output_dir / filename
+        with open(jsonl_path, "w", encoding="utf-8") as f:
+            for issue in self.issues:
+                record = {
+                    "finding_id": issue.issue_id,
+                    "severity": issue.severity.value,
+                    "classification": issue.classification.value,
+                    "confidence_level": issue.confidence_level,
+                    "requires_human_approval": issue.requires_human_approval,
+                    "source_filename": Path(issue.source_file).name,
+                    "record_id": issue.record_id or f"L{issue.start_line}-L{issue.end_line}",
+                    "start_line": issue.start_line,
+                    "end_line": issue.end_line,
+                    "programme": issue.programme,
+                    "category": issue.category.value,
+                    "issue_code": issue.issue_code,
+                    "evidence_excerpt": issue.raw_snippet,
+                    "question_snippet": issue.question_snippet,
+                    "explanation": issue.description,
+                    "recommended_action": issue.suggested_action,
+                    "status": issue.status.value,
+                    "requires_official_verification": issue.status.value == "OFFICIAL_VERIFICATION_REQUIRED",
+                }
+                f.write(json.dumps(record) + "\n")
+        return jsonl_path
 
     def export_markdown(self, filename: str) -> Path:
         """Exports an executive summary in Markdown format."""

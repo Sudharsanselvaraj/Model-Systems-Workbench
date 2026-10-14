@@ -1,7 +1,5 @@
-"""Validation engine for detecting deterministic errors and heuristic warnings in KB records."""
-
 import re
-from typing import List, Dict, Set, Tuple
+from typing import List, Dict, Set, Tuple, Optional
 from collections import defaultdict
 
 from msu_llm_lab.audit.models import (
@@ -10,7 +8,22 @@ from msu_llm_lab.audit.models import (
     AuditIssue,
     IssueSeverity,
     IssueCategory,
+    FindingStatus,
+    FindingClassification,
 )
+
+
+def redact_sensitive(text: str) -> str:
+    """Redacts potential emails, phone numbers, API keys, or student personal information."""
+    if not text:
+        return text
+    # Redact email addresses
+    text = re.sub(r'[\w\.-]+@[\w\.-]+\.\w+', '[REDACTED_EMAIL]', text)
+    # Redact phone numbers (Malaysian / international format e.g. +601..., 03-5521...)
+    text = re.sub(r'(?:\+?60|0)[1-9][0-9\-]{7,11}', '[REDACTED_PHONE]', text)
+    # Redact bearer tokens or api keys
+    text = re.sub(r'(?:api[_-]?key|secret|token|bearer)\s*[:=]\s*\S+', '[REDACTED_SECRET]', text, flags=re.IGNORECASE)
+    return text
 
 
 # Regex patterns for heuristic checks
@@ -67,9 +80,40 @@ class KBValidator:
         description: str,
         raw_snippet: str,
         suggested_action: str,
+        record_id: Optional[str] = None,
+        status: Optional[FindingStatus] = None,
     ) -> None:
         self._issue_counter += 1
         issue_id = f"ISSUE-{self._issue_counter:04d}"
+        if status is None:
+            if severity == IssueSeverity.ERROR:
+                status = FindingStatus.CONFIRMED
+            elif issue_code in ("CONFLICTING_TUITION_FEES", "TIME_SENSITIVE_CONTENT"):
+                status = FindingStatus.OFFICIAL_VERIFICATION_REQUIRED
+            else:
+                status = FindingStatus.CANDIDATE
+
+        if severity == IssueSeverity.ERROR:
+            classification = FindingClassification.CONFIRMED_STRUCTURAL_DEFECT
+            confidence_level = "HIGH"
+            requires_human_approval = False
+        elif issue_code == "DUPLICATE_QUESTION_EXACT":
+            classification = FindingClassification.CONFIRMED_EXACT_DUPLICATE
+            confidence_level = "HIGH"
+            requires_human_approval = True
+        elif issue_code == "CONFLICTING_TUITION_FEES":
+            classification = FindingClassification.POTENTIAL_CONTRADICTION
+            confidence_level = "HIGH"
+            requires_human_approval = True
+        elif issue_code == "TIME_SENSITIVE_CONTENT":
+            classification = FindingClassification.POTENTIALLY_OUTDATED_INFO
+            confidence_level = "MEDIUM"
+            requires_human_approval = True
+        else:
+            classification = FindingClassification.POTENTIAL_SEMANTIC_DEFECT
+            confidence_level = "MEDIUM"
+            requires_human_approval = True
+
         issue = AuditIssue(
             issue_id=issue_id,
             source_file=self.source_file,
@@ -79,11 +123,16 @@ class KBValidator:
             category=category,
             issue_code=issue_code,
             programme=programme,
-            question_snippet=question_snippet[:100],
+            question_snippet=redact_sensitive(question_snippet[:100]),
             description=description,
-            raw_snippet=raw_snippet[:120].replace("\n", " "),
+            raw_snippet=redact_sensitive(raw_snippet[:120].replace("\n", " ")),
             suggested_action=suggested_action,
             requires_human_verification=True,
+            status=status,
+            record_id=record_id,
+            classification=classification,
+            confidence_level=confidence_level,
+            requires_human_approval=requires_human_approval,
         )
         self.issues.append(issue)
 
@@ -151,6 +200,8 @@ class KBValidator:
                     description=f"Question at line {r.start_line} has no corresponding Answer tag before next block.",
                     raw_snippet=r.raw_text[:120],
                     suggested_action="Add explicit '**Answer:**' tag and verified answer text.",
+                    record_id=r.record_id,
+                    status=FindingStatus.CONFIRMED,
                 )
             elif not r.answer_clean:
                 self._add_issue(
@@ -164,6 +215,8 @@ class KBValidator:
                     description=f"Record at line {r.start_line} contains an Answer tag but empty content.",
                     raw_snippet=r.raw_text[:120],
                     suggested_action="Supply verified answer content for this question.",
+                    record_id=r.record_id,
+                    status=FindingStatus.CONFIRMED,
                 )
 
             # Missing question tag or empty question
@@ -179,6 +232,8 @@ class KBValidator:
                     description=f"Answer tag at line {r.start_line} has no preceding Question tag.",
                     raw_snippet=r.raw_text[:120],
                     suggested_action="Supply preceding '**Question:**' block.",
+                    record_id=r.record_id,
+                    status=FindingStatus.CONFIRMED,
                 )
             elif not r.question_clean:
                 self._add_issue(
@@ -192,6 +247,8 @@ class KBValidator:
                     description=f"Record at line {r.start_line} contains a Question tag but empty content.",
                     raw_snippet=r.raw_text[:120],
                     suggested_action="Supply question text.",
+                    record_id=r.record_id,
+                    status=FindingStatus.CONFIRMED,
                 )
 
             # Check repetitive answer markers within a single record
@@ -207,6 +264,8 @@ class KBValidator:
                     description=f"Record at line {r.start_line} contains {r.answer_marker_count} repeated Answer markers inside a single answer.",
                     raw_snippet=r.raw_text[:120],
                     suggested_action="Normalize sub-answers into bullet points or list items.",
+                    record_id=r.record_id,
+                    status=FindingStatus.CANDIDATE,
                 )
 
             # Check for stray dangling tokens on their own line inside the answer (e.g. 'cou')
@@ -225,6 +284,8 @@ class KBValidator:
                         description=f"Potential stray or orphaned token '{token_strip}' found on line {token_line}.",
                         raw_snippet=raw_l,
                         suggested_action="Review if this token is a typographical artifact or incomplete word.",
+                        record_id=r.record_id,
+                        status=FindingStatus.CANDIDATE,
                     )
 
     def _validate_duplicates(self) -> None:
@@ -257,6 +318,8 @@ class KBValidator:
                         description=f"Exact duplicate question found at multiple locations: {locs}.",
                         raw_snippet=r.raw_text[:120],
                         suggested_action="Review duplicate entries; deduplicate or differentiate programme contexts.",
+                        record_id=r.record_id,
+                        status=FindingStatus.CANDIDATE,
                     )
 
         # Flag normalized duplicates (excluding those already flagged as exact)
@@ -277,6 +340,8 @@ class KBValidator:
                             description=f"Normalized near-duplicate question found at: {locs}.",
                             raw_snippet=r.raw_text[:120],
                             suggested_action="Verify if these questions intend to ask the same thing in different wording.",
+                            record_id=r.record_id,
+                            status=FindingStatus.CANDIDATE,
                         )
 
     def _validate_numerical_conflicts(self) -> None:
@@ -310,6 +375,8 @@ class KBValidator:
                             description=f"Conflicting fee amounts ({formatted_fees}) found within the same answer.",
                             raw_snippet=r.raw_text[:120],
                             suggested_action="Verify authoritative fee schedule with MSU finance registrar. Do not guess correct fee.",
+                            record_id=r.record_id,
+                            status=FindingStatus.OFFICIAL_VERIFICATION_REQUIRED,
                         )
 
     def _validate_programme_mismatches(self) -> None:
@@ -333,8 +400,6 @@ class KBValidator:
 
             if q_degree_matches and prog_degree_matches:
                 # If question explicitly names a degree level or discipline, check for mismatch
-                # Example: Section is "Doctor of Philosophy (Food Service Technology)", but Q is "What is Doctor of Philosophy (Applied Science)?"
-                # Extract subject in parentheses if present
                 prog_paren = re.findall(r'\((.*?)\)', r.programme_name)
                 q_paren = re.findall(r'\((.*?)\)', r.question_clean)
 
@@ -350,6 +415,8 @@ class KBValidator:
                         description=f"Question references '({q_paren[0]})' but section header specifies '({prog_paren[0]})'.",
                         raw_snippet=r.raw_text[:120],
                         suggested_action="Review if question was copied from another programme section without updating discipline name.",
+                        record_id=r.record_id,
+                        status=FindingStatus.CANDIDATE,
                     )
 
     def _validate_time_sensitivity(self) -> None:
@@ -378,4 +445,161 @@ class KBValidator:
                     description=f"Record references potentially time-sensitive information ({detail_str}).",
                     raw_snippet=r.raw_text[:120],
                     suggested_action="Verify validity for current academic year (intakes, fees, ranking dates).",
+                    record_id=r.record_id,
+                    status=FindingStatus.OFFICIAL_VERIFICATION_REQUIRED,
+                )
+
+
+class CrossKBValidator:
+    """Detects cross-document contradictions and coverage gaps between General KB and Programmes KB."""
+
+    def __init__(
+        self,
+        general_source: str,
+        general_records: List[KBRecord],
+        general_headings: List[Heading],
+        programmes_source: str,
+        programmes_records: List[KBRecord],
+        programmes_headings: List[Heading],
+    ):
+        self.general_source = general_source
+        self.general_records = general_records
+        self.general_headings = general_headings
+        self.programmes_source = programmes_source
+        self.programmes_records = programmes_records
+        self.programmes_headings = programmes_headings
+        self.issues: List[AuditIssue] = []
+        self._issue_counter = 0
+
+    def _add_issue(
+        self,
+        source_file: str,
+        start_line: int,
+        end_line: int,
+        severity: IssueSeverity,
+        category: IssueCategory,
+        issue_code: str,
+        programme: str,
+        question_snippet: str,
+        description: str,
+        raw_snippet: str,
+        suggested_action: str,
+        record_id: Optional[str] = None,
+        status: FindingStatus = FindingStatus.CANDIDATE,
+    ) -> None:
+        self._issue_counter += 1
+        issue_id = f"CROSS-{self._issue_counter:04d}"
+
+        if severity == IssueSeverity.ERROR:
+            classification = FindingClassification.CONFIRMED_STRUCTURAL_DEFECT
+            confidence_level = "HIGH"
+            requires_human_approval = False
+        elif issue_code == "CROSS_KB_DUPLICATE_QUESTION":
+            classification = FindingClassification.POTENTIAL_CONTRADICTION
+            confidence_level = "HIGH"
+            requires_human_approval = True
+        else:
+            classification = FindingClassification.POTENTIAL_SEMANTIC_DEFECT
+            confidence_level = "MEDIUM"
+            requires_human_approval = True
+
+        issue = AuditIssue(
+            issue_id=issue_id,
+            source_file=source_file,
+            start_line=start_line,
+            end_line=end_line,
+            severity=severity,
+            category=category,
+            issue_code=issue_code,
+            programme=programme,
+            question_snippet=redact_sensitive(question_snippet[:100]),
+            description=description,
+            raw_snippet=redact_sensitive(raw_snippet[:120].replace("\n", " ")),
+            suggested_action=suggested_action,
+            requires_human_verification=True,
+            status=status,
+            record_id=record_id,
+            classification=classification,
+            confidence_level=confidence_level,
+            requires_human_approval=requires_human_approval,
+        )
+        self.issues.append(issue)
+
+    def validate_cross_kb(self) -> List[AuditIssue]:
+        """Runs comprehensive cross-knowledge-base consistency checks."""
+        self._check_programme_coverage_gap()
+        self._check_cross_kb_duplicate_queries()
+        self._check_cross_kb_financial_aid_consistency()
+        return self.issues
+
+    def _check_programme_coverage_gap(self) -> None:
+        """Detects programmes present in Programmes KB that are absent from General KB's course directory."""
+        gen_text = " ".join(r.raw_text for r in self.general_records)
+        prog_headings = [h for h in self.programmes_headings if h.level == 1 and h.text and h.text != "General" and not h.text.startswith("General Information")]
+
+        missing_count = 0
+        for h in prog_headings:
+            clean_name = re.sub(r"\s*\((Hons|Honours|Online|ADM|Part-time|Full-time)\)", "", h.text, flags=re.IGNORECASE).strip()
+            if clean_name.lower() not in gen_text.lower():
+                missing_count += 1
+                if missing_count <= 10:  # Report representative sample
+                    self._add_issue(
+                        source_file=self.general_source,
+                        start_line=h.line_number,
+                        end_line=h.line_number,
+                        severity=IssueSeverity.WARNING,
+                        category=IssueCategory.PROGRAMME_MISMATCH,
+                        issue_code="CROSS_KB_PROGRAMME_OMISSION",
+                        programme=h.text,
+                        question_snippet="Programmes Directory Omission",
+                        description=f"Academic programme '{h.text}' documented in Programmes KB is omitted from General KB campus course listings.",
+                        raw_snippet=f"Programme heading in Programmes KB: {h.text}",
+                        suggested_action="Synchronize General KB campus programme listings with official registrar offerings.",
+                        status=FindingStatus.CANDIDATE,
+                    )
+
+    def _check_cross_kb_duplicate_queries(self) -> None:
+        """Checks if identical questions exist across both KBs."""
+        norm_gen = {normalize_question(r.question_clean): r for r in self.general_records if r.question_clean}
+        for r in self.programmes_records:
+            if not r.question_clean:
+                continue
+            nq = normalize_question(r.question_clean)
+            if nq in norm_gen:
+                rg = norm_gen[nq]
+                self._add_issue(
+                    source_file=self.programmes_source,
+                    start_line=r.start_line,
+                    end_line=r.end_line,
+                    severity=IssueSeverity.WARNING,
+                    category=IssueCategory.DUPLICATE_CONTENT,
+                    issue_code="CROSS_KB_DUPLICATE_QUESTION",
+                    programme=f"{rg.programme_name} vs {r.programme_name}",
+                    question_snippet=r.question_clean,
+                    description=f"Identical question found in both General KB (L{rg.start_line}) and Programmes KB (L{r.start_line}).",
+                    raw_snippet=r.raw_text[:120],
+                    suggested_action="Review if general answer conflicts with programme-specific answer.",
+                    record_id=r.record_id,
+                    status=FindingStatus.CANDIDATE,
+                )
+
+    def _check_cross_kb_financial_aid_consistency(self) -> None:
+        """Checks for ungrounded financial aid records in General KB affecting cross-KB answers."""
+        gen_ptptn_records = [r for r in self.general_records if "ptptn" in r.question_clean.lower() or "affin" in r.question_clean.lower()]
+        for r in gen_ptptn_records:
+            if not r.has_answer_tag:
+                self._add_issue(
+                    source_file=self.general_source,
+                    start_line=r.start_line,
+                    end_line=r.end_line,
+                    severity=IssueSeverity.ERROR,
+                    category=IssueCategory.MISSING_FIELD,
+                    issue_code="CROSS_KB_UNGROUNDED_FINANCIAL_AID",
+                    programme="Local Scholarships",
+                    question_snippet=r.question_clean,
+                    description=f"General KB financial aid entry at L{r.start_line} has no Answer tag, causing potential RAG hallucination.",
+                    raw_snippet=r.raw_text[:120],
+                    suggested_action="Add explicit Answer tag and verified loan eligibility guidelines.",
+                    record_id=r.record_id,
+                    status=FindingStatus.CONFIRMED,
                 )

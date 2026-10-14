@@ -247,15 +247,15 @@ def test_panel_renderers():
 
 
 def test_monochrome_selection_and_palette():
-    """Verify restrained monochrome palette and inverted selection highlights."""
+    """Verify purple-and-black palette and selection highlights."""
     from msu_llm_lab.tui.theme import STYLE_ROW_SELECTED, BG_DARK, TEXT_PRIMARY, BORDER_CHARCOAL
 
-    assert BG_DARK == "#1C1C1C"
-    assert TEXT_PRIMARY == "#D0D0D0"
-    assert BORDER_CHARCOAL == "#383838"
-    # Inverted selection: dark text on light gray background
-    assert STYLE_ROW_SELECTED.color.name.lower() == "#1c1c1c"
-    assert STYLE_ROW_SELECTED.bgcolor.name.lower() == "#d0d0d0"
+    assert BG_DARK == "#212633"
+    assert TEXT_PRIMARY == "#f8fafc"
+    assert BORDER_CHARCOAL == "#3b4256"
+    # Selection: crisp white on royal purple background
+    assert STYLE_ROW_SELECTED.color.name.lower() == "#ffffff"
+    assert STYLE_ROW_SELECTED.bgcolor.name.lower() == "#4c1d95"
 
 
 def test_workbench_tui_btop_layout():
@@ -855,4 +855,30 @@ def test_tui_traces_observability_navigation_and_inspection():
     # Up returns cursor to 0
     app_tui.handle_key("UP")
     assert app_tui.content_cursor == 0
+
+
+def test_welcome_screen_render():
+    """Verify WelcomeScreen renders Braille logo, telemetry, and menu items properly."""
+    from msu_llm_lab.tui.welcome import WelcomeScreen
+    buf = io.StringIO()
+    test_console = Console(file=buf, width=100)
+    screen = WelcomeScreen(console=test_console)
+    screen.render(clear=False)
+    output = buf.getvalue()
+
+    assert "Welcome to MSU LLM Workbench" in output
+    assert "Corpus: 3,030 clean" in output
+    assert "Tests: 95 passed" in output
+    assert "Spend: $0.00 / $10 cap" in output
+    assert "Launch Full-Screen TUI Dashboard" in output
+    assert "Run Decoupled RAG Benchmark" in output
+    assert "Simulate vLLM Serving & Hardware Sizing" in output
+    assert "msu-llm-lab >" in output
+
+
+def test_welcome_cli_command():
+    """Verify msu-llm-lab welcome command can be invoked."""
+    result = runner.invoke(app, ["welcome"], input="9\n")
+    assert result.exit_code == 0
+
 

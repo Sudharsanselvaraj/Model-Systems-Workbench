@@ -1,6 +1,6 @@
 # Project Map: MSU LLM Research Workbench (`msu-llm-lab`)
 
-**Status**: Phase 0 — Workspace Investigation (Approved with Corrections)  
+**Status**: Phases 0–6 Complete; Benchmark Hardening v2.1 Established  
 **Date**: October 2026  
 **Workspace Path**: `/Users/sudharsan/Documents/Times Media/LLM Workbench`
 
@@ -12,16 +12,16 @@
 
 The workspace contains two raw knowledge-base source files:
 
-| File Name | Path | Size | Line Count | Initial SHA-256 Hash |
+| File Name | Path | Size | Line Count | SHA-256 Hash (Current Re-Audit Baseline) |
 | :--- | :--- | :--- | :--- | :--- |
-| `Copy of MSU General KB - Local - Sudarshan.md` | [General KB](file:///Users/sudharsan/Documents/Times%20Media/LLM%20Workbench/Copy%20of%20MSU%20General%20KB%20-%20Local%20-%20Sudarshan.md) | 111,810 bytes | 2,097 lines | `138e6893a1d54f36cfb2b7abe33317c16647769eb016e71c35f1071a741cfc72` |
+| `Copy of MSU General KB - Local - Sudarshan.md` | [General KB](file:///Users/sudharsan/Documents/Times%20Media/LLM%20Workbench/Copy%20of%20MSU%20General%20KB%20-%20Local%20-%20Sudarshan.md) | 105,403 bytes | 2,098 lines | `9fbd1673a70db54d0128df8b3bad4c259adc0fc0981717049b6048e8a45e9791` |
 | `Copy of MSU Programmes KB - Local - Sudharsan.md` | [Programmes KB](file:///Users/sudharsan/Documents/Times%20Media/LLM%20Workbench/Copy%20of%20MSU%20Programmes%20KB%20-%20Local%20-%20Sudharsan.md) | 961,958 bytes | 17,526 lines | `a46773fea196d8fe6529f5d6d8f6adb9d26ca5a6511185004822f249b2d3282b` |
 
-*Source File Integrity Rule*: Both files are strictly read-only. Hashes must be checked before and after all audit operations to guarantee zero modification.
+*Note on Hash History*: General KB was reintroduced with unescaped Markdown headings (`# \#` normalized to `#`), changing its size from 111,810 bytes (`138e689...`) to 105,403 bytes (`9fbd167...`). Programmes KB maintains identical hash (`a46773f...`). Both files remain 100% read-only and immutable.
 
 ### 1.2 Git & Version Control State
-- **Status**: Not currently a Git repository (`fatal: not a git repository`).
-- **Phase 1 Prerequisite**: Initialize Git repository (`git init`) and apply a strict `.gitignore` *before* staging files, ensuring no secrets, local environments, traces, or unapproved data are tracked.
+- **Status**: Git repository initialized with strict `.gitignore` excluding secrets, `.venv`, cache, and proprietary knowledge base files.
+- **Test Suite Status**: **93 passed tests** (`uv run pytest`) across audit, budget, dataset, providers, rag, serving, traces, and TUI.
 
 ### 1.3 Python & Tooling Environment
 - **System Python**: `3.11.7` (`/Library/Frameworks/Python.framework/Versions/3.11/bin/python3`) — fulfills the Python 3.11 requirement.
@@ -29,8 +29,8 @@ The workspace contains two raw knowledge-base source files:
   - `uv` is installed at `/opt/homebrew/bin/uv` (recommended for fast, reproducible venv and dependency resolution).
   - Standard `pip3` is installed at `/Library/Frameworks/Python.framework/Versions/3.11/bin/pip3`.
   - `poetry` is not installed.
-- **Virtual Environment**: Isolated project virtualenv (`.venv`) to be initialized in Phase 1.
-- **Test Framework**: `pytest`.
+- **Virtual Environment**: Isolated project virtualenv (`.venv`) active.
+- **Test Framework**: `pytest` (93 passing tests in 0.39s).
 
 ### 1.4 Configuration & Secrets State
 - No `.env` or credential files exist in the repository.
@@ -81,50 +81,65 @@ LLM Workbench/
 │       ├── __init__.py                 # Version and package root
 │       ├── cli.py                      # Typer CLI application root
 │       ├── audit/                      # Phase 1: Knowledge-base audit engine
-│       │   ├── __init__.py
 │       │   ├── parser.py               # Robust markdown & escaped-tag parser
 │       │   ├── validator.py            # Deterministic checks & heuristic detectors
-│       │   └── reporter.py             # CSV and Markdown report generators
+│       │   ├── reporter.py             # CSV and Markdown report generators
+│       │   └── models.py               # AuditIssue models and defect schemas
+│       ├── remediation/                # Phase 1: Remediation engine & safe clean copies
+│       │   ├── engine.py               # Deterministic fix rules (preserves source files)
+│       │   └── registry.py             # Curated defect registry
+│       ├── core/                       # Governance & configuration
+│       │   ├── config.py               # Environment configuration
+│       │   └── budget.py               # BudgetService with spend ceilings & ledger
 │       ├── schemas/                    # Phase 2: Pydantic schemas
-│       │   ├── __init__.py
 │       │   ├── evaluation.py           # EvaluationCase, VerificationStatus, DataClassification
 │       │   ├── execution.py            # ModelExecutionRecord, UsageMetrics, CostEstimate
 │       │   └── trace.py                # Redacted Trace, Observation, Latency schemas
 │       ├── dataset/                    # Phase 2: Evaluation dataset manager
-│       │   ├── __init__.py
 │       │   ├── manager.py              # JSONL import/export, split management (train/dev/test)
 │       │   └── leakage.py              # Deduplication and cross-split leakage detector
 │       ├── providers/                  # Phase 3: Model provider abstractions
-│       │   ├── __init__.py
 │       │   ├── base.py                 # Abstract Base Provider interface & guardrails
 │       │   └── openrouter.py           # OpenRouter client with fail-closed privacy gate
 │       ├── evaluation/                 # Phase 3: Benchmarking & scoring engine
-│       │   ├── __init__.py
 │       │   ├── runner.py               # Benchmark execution coordinator
 │       │   └── metrics.py              # Factual accuracy, groundedness, rubric scorers
+│       ├── rag/                        # Phase 5: Decoupled RAG benchmarking
+│       │   ├── retriever.py            # KeywordBM25Retriever (clean KB index) & MockRetriever
+│       │   ├── evaluator.py            # Answer correctness & groundedness scoring
+│       │   ├── runner.py               # Decoupled RAG benchmark coordinator
+│       │   └── models.py               # RAG benchmark report schemas
+│       ├── serving/                    # Phase 6: vLLM serving simulation & hardware sizing
+│       │   ├── simulator.py            # Memory footprint, concurrency ramp, cost crossover
+│       │   └── models.py               # Hardware profiles, serving specs, crossover results
 │       ├── traces/                     # Phase 4: Langfuse trace importer & analysis
-│       │   ├── __init__.py
 │       │   ├── importer.py             # Authorized redacted JSON/CSV importer
 │       │   └── analyzer.py             # Candidate diagnosis engine (routing, retrieval, generation)
 │       ├── storage/                    # Local persistence
-│       │   ├── __init__.py
 │       │   └── db.py                   # Lightweight SQLite storage for experiment history
-│       └── dashboard/                  # Phase 7: Local Streamlit interface
-│           ├── __init__.py
-│           └── app.py                  # Read-only review UI using msu_llm_lab services
-├── tests/                              # Automated test suite (pytest)
-│   ├── __init__.py
-│   ├── conftest.py                     # Shared fixtures (safe mock data, isolated paths)
-│   ├── test_audit.py                   # Tests for parser, validator, and edge cases
-│   ├── test_schemas.py                 # Schema validation, serialization, and invariants
-│   ├── test_providers.py               # Mocked provider tests & fail-closed confidentiality gate
-│   └── test_traces.py                  # Trace import validation and edge cases
+│       └── tui/                        # Interactive Textual terminal dashboard
+│           ├── app.py                  # Full-screen dashboard app
+│           ├── screens.py              # Overview, Models, Audit, Budget screens
+│           └── health.py               # System health & telemetry checks
+├── tests/                              # Automated test suite (93 passing tests)
+│   ├── test_audit.py                   # KB parser, validator, and edge cases
+│   ├── test_budget.py                  # Budget ledger and ceiling enforcement
+│   ├── test_dataset.py                 # Dataset manager and leakage checks
+│   ├── test_providers.py               # OpenRouter adapter and confidentiality gate
+│   ├── test_rag_benchmark.py           # Decoupled RAG retrieval, metrics, and abstention
+│   ├── test_remediation.py             # Source hash preservation and clean copy generation
+│   ├── test_schemas.py                 # Pydantic data schemas
+│   ├── test_serving.py                 # vLLM serving simulation and cost crossover
+│   ├── test_traces.py                  # Langfuse trace import and failure classification
+│   └── test_tui.py                     # Terminal UI screens and health checks
 ├── data/                               # Local data storage (never checked into git)
-│   ├── evaluations/                    # Versioned JSONL benchmark test sets
-│   └── trace_imports/                  # Authorized redacted trace exports
-├── reports/                            # Output directory for audit & evaluation reports
-├── Copy of MSU General KB - Local - Sudarshan.md     # Original General KB (read-only)
-└── Copy of MSU Programmes KB - Local - Sudharsan.md   # Original Programmes KB (read-only)
+│   ├── evaluation/                     # Versioned JSONL benchmark test sets (v2.1 baseline)
+│   ├── audit/                          # Parsed structural KB records (3,030 clean, 21 excluded)
+│   ├── remediated/                     # Versioned clean KB copies
+│   └── traces/                         # Authorized redacted trace exports
+├── reports/                            # Output directory for audit, benchmark & serving reports
+├── Copy of MSU General KB - Local - Sudarshan.md     # Original General KB (read-only baseline)
+└── Copy of MSU Programmes KB - Local - Sudharsan.md   # Original Programmes KB (read-only baseline)
 ```
 
 ---

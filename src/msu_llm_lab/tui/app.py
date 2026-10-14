@@ -16,6 +16,7 @@ from msu_llm_lab.traces.models import TraceRecord, TraceDiagnosticReport
 from msu_llm_lab.tui.health import run_system_health_checks, HealthCheckItem
 from msu_llm_lab.tui.input import KeyReader
 from msu_llm_lab.tui.telemetry import SystemTelemetry, InferenceTelemetry, LogBuffer
+from msu_llm_lab.tui.theme import BG_DARK
 from msu_llm_lab.tui.screens import (
     NAV_ITEMS,
     build_top_header,
@@ -330,9 +331,9 @@ class WorkbenchTUI:
 
         from rich.live import Live
 
-        # Dynamic terminal background set to deep matte charcoal (#141414) on supported emulators
+        # Apply slight grey slate background matching OpenSRE (#212633)
         try:
-            sys.stdout.write("\033]11;#141414\007")
+            sys.stdout.write(f"\033]11;{BG_DARK}\007")
             sys.stdout.flush()
         except Exception:
             pass

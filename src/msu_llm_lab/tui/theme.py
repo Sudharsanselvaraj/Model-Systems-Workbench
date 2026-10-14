@@ -3,39 +3,39 @@
 from typing import List, Optional, Tuple
 from rich.style import Style
 
-# Charcoal Monochrome Palette (matching systems engineering reference)
-BG_DARK = "#1C1C1C"              # Near-black charcoal background
-PANEL_BG = "#1C1C1C"             # Panel background
-PANEL_BG_SECONDARY = "#222222"   # Secondary container background
-BORDER_CHARCOAL = "#383838"      # Subtle charcoal border
-BORDER_FOCUSED = "#D0D0D0"       # Active focused border (crisp high-contrast silver/white)
+# OpenSRE-inspired Slate Grey Palette with Lavender Accents
+BG_DARK = "#212633"              # Distinct, comfortable slate-grey background (sampled from OpenSRE)
+PANEL_BG = "#262b3a"             # Subtle elevated slate-grey panel background
+PANEL_BG_SECONDARY = "#2c3243"   # Elevated container background
+BORDER_CHARCOAL = "#3b4256"      # Refined slate border (crisp and visible against grey canvas)
+BORDER_FOCUSED = "#c084fc"       # Radiant lavender border for active focused panel
 BORDER_TEAL = BORDER_CHARCOAL    # Backwards compatibility alias
-CYAN_HIGHLIGHT = "#D0D0D0"       # Backwards compatibility alias (mapped to soft light gray)
+CYAN_HIGHLIGHT = "#d8b4fe"       # Soft lilac accent for titles and indicators
 
-TEXT_PRIMARY = "#D0D0D0"         # Soft light gray primary text
-TEXT_SECONDARY = "#888888"       # Muted gray secondary text
-TEXT_MUTED = "#555555"           # Dark muted gray / inactive elements
-TEXT_BRIGHT = "#FFFFFF"          # Crisp white highlights
+TEXT_PRIMARY = "#f8fafc"         # Crisp, clean off-white primary text
+TEXT_SECONDARY = "#94a3b8"       # Balanced slate gray secondary text
+TEXT_MUTED = "#64748b"           # Deep restrained slate for inactive items and axes
+TEXT_BRIGHT = "#ffffff"          # Crisp white highlights
 
-# Restrained Monochrome Status Colors (Zero vibrant neon)
-COLOR_SUCCESS = "#A0A0A0"        # Subdued gray for active/pass status
-COLOR_WARNING = "#C0A060"        # Restrained muted amber warning
-COLOR_ERROR = "#A85050"          # Subdued dark red error
-COLOR_INFO = "#888888"           # Informational text
+# Clean Status Colors (Zero emojis)
+COLOR_SUCCESS = "#4ade80"        # Clean emerald check
+COLOR_WARNING = "#fbbf24"        # Warm amber warning
+COLOR_ERROR = "#f87171"          # Soft coral red error
+COLOR_INFO = "#c084fc"           # Elegant lavender info
 
 # Rich Style Objects
-STYLE_TITLE = Style(color=TEXT_PRIMARY, bold=True)
+STYLE_TITLE = Style(color="#e9d5ff", bold=True)
 STYLE_MUTED = Style(color=TEXT_MUTED)
 STYLE_SECONDARY = Style(color=TEXT_SECONDARY)
-STYLE_SUCCESS = Style(color=TEXT_PRIMARY, bold=True)
+STYLE_SUCCESS = Style(color=COLOR_SUCCESS, bold=True)
 STYLE_WARNING = Style(color=COLOR_WARNING, bold=True)
 STYLE_ERROR = Style(color=COLOR_ERROR, bold=True)
-STYLE_CYAN = Style(color=TEXT_PRIMARY, bold=True)
-STYLE_PANEL = Style(color=TEXT_PRIMARY, bgcolor=BG_DARK)
+STYLE_CYAN = Style(color="#d8b4fe", bold=True)
+STYLE_PANEL = Style(color=TEXT_PRIMARY, bgcolor=PANEL_BG)
 
-# Inverted Monochrome Selection Highlights
-STYLE_ROW_SELECTED = Style(color="#1C1C1C", bgcolor="#D0D0D0", bold=True)
-STYLE_ROW_HOVER = Style(color=TEXT_PRIMARY, bgcolor="#2A2A2A")
+# Refined Royal Purple Selection Highlights
+STYLE_ROW_SELECTED = Style(color="#ffffff", bgcolor="#4c1d95", bold=True)
+STYLE_ROW_HOVER = Style(color="#f8fafc", bgcolor="#2e1065")
 
 # Sparkline characters (Unicode Block Elements U+2581 to U+2588)
 SPARK_CHARS = (" ", " ", "▂", "▃", "▄", "▅", "▆", "▇", "█")

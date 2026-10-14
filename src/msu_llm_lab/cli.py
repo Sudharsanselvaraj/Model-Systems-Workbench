@@ -17,6 +17,17 @@ from msu_llm_lab.audit.reporter import KBReporter
 from msu_llm_lab.audit.validator import KBValidator
 from msu_llm_lab.core.budget import BudgetService
 from msu_llm_lab.models.catalog import get_portfolio
+from msu_llm_lab.serving import (
+    CostCrossoverAnalyzer,
+    HARDWARE_PROFILES,
+    HardwareSizingEngine,
+    MODEL_ARCHITECTURES,
+    QuantizationPrecision,
+    ServingBenchmarkSimulator,
+    ServingReportGenerator,
+    get_hardware_profile,
+    get_model_architecture,
+)
 
 import sys
 
@@ -54,11 +65,64 @@ def main(
 ) -> None:
     """MSU Admissions LLM Research Workbench."""
     if ctx.invoked_subcommand is None:
-        if interactive or sys.stdin.isatty():
+        if interactive:
             from msu_llm_lab.tui.app import run_tui
             run_tui()
+        elif sys.stdin.isatty():
+            from msu_llm_lab.tui.welcome import show_welcome_screen
+            choice = show_welcome_screen()
+            handle_welcome_action(choice)
         else:
             console.print(ctx.get_help())
+
+
+def handle_welcome_action(choice: int) -> None:
+    """Dispatches user choice from the welcome launcher to appropriate workflow."""
+    if choice == 1:
+        from msu_llm_lab.tui.app import run_tui
+        run_tui()
+    elif choice == 2:
+        gen = Path("Copy of MSU General KB - Local - Sudarshan.md")
+        if gen.exists():
+            console.print("\n[bold #c084fc]Auditing MSU General Knowledge Base...[/]")
+            audit_kb(file_path=gen, dry_run=True)
+    elif choice == 3:
+        benchmark_rag(retriever_mode="bm25", dry_run=True, top_k=3)
+    elif choice == 4:
+        benchmark_rag(
+            model="google/gemini-3.5-flash-lite",
+            compare_with="anthropic/claude-haiku-5.5",
+            retriever_mode="bm25",
+            dry_run=True,
+        )
+    elif choice == 5:
+        trace_file = Path("data/traces/synthetic_langfuse_traces.json")
+        if trace_file.exists():
+            import_traces(export_file=trace_file, output_dir=Path("reports/"))
+        else:
+            console.print("[yellow]Trace file not found in data/traces/.[/]")
+    elif choice == 6:
+        simulate_serving(model="qwen/qwen-2.5-72b", hardware="a100_80gb", tp=2)
+    elif choice == 7:
+        budget_status()
+    elif choice == 8:
+        console.print("\n[bold #c084fc]Cryptographic Knowledge Base Baseline Verification:[/]")
+        gen = Path("Copy of MSU General KB - Local - Sudarshan.md")
+        prog = Path("Copy of MSU Programmes KB - Local - Sudharsan.md")
+        if gen.exists():
+            console.print(f"  General KB SHA-256:    [green]{compute_sha256(gen)}[/] (Verified Immutable)")
+        if prog.exists():
+            console.print(f"  Programmes KB SHA-256: [green]{compute_sha256(prog)}[/] (Verified Immutable)")
+    elif choice == 9:
+        console.print("[dim]Exiting MSU LLM Workbench. Goodbye.[/]\n")
+
+
+@app.command(name="welcome")
+def launch_welcome() -> None:
+    """Launch the interactive developer-grade welcome screen."""
+    from msu_llm_lab.tui.welcome import show_welcome_screen
+    choice = show_welcome_screen()
+    handle_welcome_action(choice)
 
 
 @app.command(name="ui")
@@ -605,6 +669,17 @@ def benchmark_rag(
         "-c",
         help="Optional second candidate model ID for side-by-side RAG comparison.",
     ),
+    top_k: int = typer.Option(
+        2,
+        "--top-k",
+        "-k",
+        help="Number of context chunks to retrieve per case (default 2).",
+    ),
+    exclude_defective: bool = typer.Option(
+        True,
+        "--exclude-defective/--include-all",
+        help="Exclude known contradictory or incomplete records from the retrieval index (default True).",
+    ),
 ) -> None:
     """Benchmark candidate models on decoupled retrieval, generation, and end-to-end RAG metrics."""
     from msu_llm_lab.dataset.manager import DatasetManager
@@ -617,8 +692,29 @@ def benchmark_rag(
 
     # Initialize retriever
     if retriever_mode.lower() == "bm25":
-        all_cases = DatasetManager.load_jsonl(dataset)
-        retriever = KeywordBM25Retriever(corpus_cases=all_cases)
+        gen_kb_path = Path("data/audit/parsed_records_general_kb.jsonl")
+        prog_kb_path = Path("data/audit/parsed_records_programmes_kb.jsonl")
+        if gen_kb_path.exists() or prog_kb_path.exists():
+            retriever = KeywordBM25Retriever.from_parsed_kb(
+                general_path=gen_kb_path if gen_kb_path.exists() else None,
+                programmes_path=prog_kb_path if prog_kb_path.exists() else None,
+                exclude_defective=exclude_defective,
+            )
+            manifest = getattr(retriever, "manifest", {})
+            console.print(
+                f"[dim]BM25 indexed {len(retriever.documents)} clean documents from audited KB records "
+                f"(excluded {manifest.get('excluded_defective_count', 0)} defective records).[/dim]"
+            )
+        else:
+            all_cases = DatasetManager.load_jsonl(dataset)
+            retriever = KeywordBM25Retriever(corpus_cases=all_cases)
+            console.print("[yellow]Warning: Audited KB records not found; falling back to evaluation context passages.[/yellow]")
+        
+        # Verify no evaluation leakage
+        test_cases = DatasetManager.load_jsonl(dataset)
+        leaked = retriever.verify_no_leakage(test_cases)
+        if leaked:
+            console.print(f"[bold red]WARNING: Evaluation data leakage detected for case IDs: {leaked}[/bold red]")
     elif retriever_mode.lower() in ("noisy", "empty"):
         retriever = MockRetriever(mode=retriever_mode.lower())
     else:
@@ -628,13 +724,13 @@ def benchmark_rag(
     console.print(Panel(
         f"[bold cyan]MSU End-to-End RAG Benchmark[/bold cyan]\n"
         f"[dim]Primary Model:[/dim]  [bold white]{model}[/bold white]\n"
-        f"[dim]Retriever:[/dim]      [bold green]{retriever.__class__.__name__}[/bold green] (mode: {retriever_mode})\n"
+        f"[dim]Retriever:[/dim]      [bold green]{retriever.__class__.__name__}[/bold green] (mode: {retriever_mode}, top_k: {top_k})\n"
         f"[dim]Dataset:[/dim]        {dataset.name} (Split: {split_clean})\n"
         f"[dim]Execution Mode:[/dim] {mode_str}",
         expand=False,
     ))
 
-    runner = RAGBenchmarkRunner(retriever=retriever)
+    runner = RAGBenchmarkRunner(retriever=retriever, top_k=top_k)
     report_a = runner.run(model_id=model, dataset_path=dataset, split=split_enum, dry_run=dry_run)
 
     # 1. Decoupled Summary Table
@@ -643,12 +739,18 @@ def benchmark_rag(
     summary_table.add_column("Value", justify="right", style="bold")
     summary_table.add_column("Evaluation Context", style="dim")
 
-    summary_table.add_row("Evaluated Cases", f"{report_a.total_cases}", f"Split: {split_clean}")
-    summary_table.add_row("Retrieval Hit Rate", f"{report_a.mean_retrieval_hit_rate * 100:.1f}%", "Grounding passages successfully fetched")
-    summary_table.add_row("Retrieval Precision", f"{report_a.mean_retrieval_precision * 100:.1f}%", "Ratio of target keywords captured")
+    summary_table.add_row("Total Evaluated Cases", f"{report_a.total_cases}", f"Split: {split_clean}")
+    summary_table.add_row("Verified Ground Truth Cases", f"{report_a.verified_cases_count}", "Cases with verified source KB records")
+    summary_table.add_row("Unresolved Abstention Cases", f"{report_a.unresolved_cases_count}", "Cases unsupported by KB expecting abstention")
+    summary_table.add_row("Source Recall@k", f"[bold green]{report_a.mean_recall_at_k * 100:.1f}%[/bold green]", f"Relevant record retrieved in top-{top_k} (Verified only)")
+    summary_table.add_row("Source Precision@k", f"{report_a.mean_precision_at_k * 100:.1f}%", f"Ratio of top-{top_k} records that are relevant")
+    summary_table.add_row("Mean Reciprocal Rank (MRR)", f"[bold cyan]{report_a.mean_reciprocal_rank:.4f}[/bold cyan]", "1 / rank of first relevant record (Verified only)")
+    summary_table.add_row("Verified Retrieval Hit Rate", f"[bold green]{report_a.verified_retrieval_hit_rate * 100:.1f}%[/bold green]", "Proportion of verified cases with >= 1 hit")
+    summary_table.add_row("Abstention Accuracy", f"[bold yellow]{report_a.abstention_accuracy * 100:.1f}%[/bold yellow]", "Model successfully abstained on unsupported queries")
     summary_table.add_row("Retrieval Latency", f"{report_a.mean_retrieval_latency_ms:.1f} ms", "Isolated context search turnaround")
-    summary_table.add_row("Answer Correctness", f"{report_a.mean_answer_correctness * 100:.1f}%", "Factual overlap against verified reference")
+    summary_table.add_row("Answer Correctness", f"{report_a.mean_answer_correctness * 100:.1f}%", "Factual overlap against reference answer")
     summary_table.add_row("Groundedness (Faithfulness)", f"{report_a.mean_groundedness * 100:.1f}%", "Supported by context (hallucination check)")
+    summary_table.add_row("Diagnostic Keyword Hit Rate", f"{report_a.diagnostic_keyword_hit_rate * 100:.1f}%", "Secondary exact keyword-substring match")
     summary_table.add_row("Generation Latency", f"{report_a.mean_generation_latency_ms:.1f} ms", "Isolated LLM inference turnaround")
     summary_table.add_row("End-to-End Latency", f"[bold yellow]{report_a.mean_e2e_latency_ms:.1f} ms[/bold yellow]", "Total user turnaround (Ret + Gen)")
     summary_table.add_row("Run Spend (USD)", f"${report_a.total_cost_usd:.4f}", "Tracked in budget ledger")
@@ -665,12 +767,12 @@ def benchmark_rag(
     tot = max(1, report_a.total_cases)
     for cat, cnt in report_a.failure_breakdown.items():
         pct = (cnt / tot) * 100
-        if cat == "SYSTEM_SUCCESS":
-            diag = "[green]Both retrieval and generation satisfied criteria[/green]"
+        if cat in ("SYSTEM_SUCCESS", "ABSTENTION_SUCCESS"):
+            diag = "[green]Satisfied source grounding or correctly abstained[/green]"
         elif cat == "RETRIEVAL_FAILURE":
             diag = "[red]Retriever starved model of necessary context[/red]"
-        elif cat == "GENERATION_FAILURE":
-            diag = "[yellow]Context available, but model hallucinated or erred[/yellow]"
+        elif cat in ("GENERATION_FAILURE", "OVERCONFIDENT_HALLUCINATION"):
+            diag = "[yellow]Context available or absent, but model erred or hallucinated[/yellow]"
         else:
             diag = "[blue]Model answered correctly despite weak context[/blue]"
         attr_table.add_row(cat, str(cnt), f"{pct:.1f}%", diag)
@@ -680,25 +782,32 @@ def benchmark_rag(
     # 3. Per-Case Performance Table
     case_table = Table(title="Per-Case Decoupled Breakdown", show_header=True, header_style="bold blue")
     case_table.add_column("Case ID", style="cyan", width=16)
-    case_table.add_column("Query Snippet", style="white", width=30)
-    case_table.add_column("Ret. Hit", justify="right", width=9)
-    case_table.add_column("Correct.", justify="right", width=9)
-    case_table.add_column("Ground.", justify="right", width=9)
-    case_table.add_column("E2E Lat.", justify="right", width=10)
-    case_table.add_column("Attribution", style="bold", width=18)
+    case_table.add_column("Status", width=14)
+    case_table.add_column("Target Record(s)", width=16)
+    case_table.add_column("Retrieved Record(s)", width=18)
+    case_table.add_column("Recall@k", justify="right", width=9)
+    case_table.add_column("MRR", justify="right", width=8)
+    case_table.add_column("Attribution", style="bold", width=22)
 
     for c in report_a.case_results:
-        q_snip = c.query[:28] + "..." if len(c.query) > 28 else c.query
-        attr_style = "[green]SUCCESS[/green]" if c.failure_attribution == "SYSTEM_SUCCESS" else f"[red]{c.failure_attribution}[/red]"
+        status_style = "[green]VERIFIED[/green]" if c.source_status == "SOURCE_VERIFIED" else "[yellow]UNRESOLVED[/yellow]"
+        targets = ", ".join(c.relevant_record_ids) if c.relevant_record_ids else "(None - Abstain)"
+        retrieved_recs = ", ".join(c.retrieved_record_ids) if c.retrieved_record_ids else "(None)"
+        
+        attr_style = (
+            "[green]SUCCESS[/green]" if c.failure_attribution in ("SYSTEM_SUCCESS", "ABSTENTION_SUCCESS")
+            else f"[red]{c.failure_attribution}[/red]"
+        )
         case_table.add_row(
             c.case_id,
-            q_snip,
-            f"{c.retrieval_hit_rate * 100:.0f}%",
-            f"{c.answer_correctness * 100:.0f}%",
-            f"{c.groundedness * 100:.0f}%",
-            f"{c.e2e_latency_ms:.0f} ms",
+            status_style,
+            targets,
+            retrieved_recs,
+            f"{c.recall_at_k * 100:.0f}%" if c.relevant_record_ids else "N/A",
+            f"{c.reciprocal_rank:.2f}" if c.relevant_record_ids else "N/A",
             attr_style,
         )
+
     console.print(case_table)
 
     # Optional Multi-Model Comparison
@@ -975,5 +1084,186 @@ def models_list() -> None:
     console.print("\n[dim]Hosted OpenRouter runs are distinct from self-hosted vLLM serving. Every evaluation record logs its deployment mode.[/dim]")
 
 
+# ---------------------------------------------------------------------------
+# Serving & Concurrency Simulation Command (Phase 6)
+# ---------------------------------------------------------------------------
+
+
+@app.command(name="simulate-serving")
+def simulate_serving(
+    model_id: str = typer.Option(
+        "qwen/qwen-2.5-72b",
+        "--model",
+        "-m",
+        help="Target model architecture ID (e.g. 'qwen/qwen-2.5-72b', 'meta/llama-3.3-70b', 'qwen/qwen-2.5-14b', 'qwen/qwen-2.5-7b').",
+    ),
+    hardware: str = typer.Option(
+        "a100_80gb",
+        "--hardware",
+        "-hw",
+        help="Target GPU hardware profile: 'a100_80gb', 'h100_80gb', 'rtx_4090', 'l40s_48gb', 'mac_studio_128gb'.",
+    ),
+    tp: int = typer.Option(
+        2,
+        "--tp",
+        help="Tensor Parallel size (number of GPUs pooled).",
+    ),
+    precision: str = typer.Option(
+        "BF16",
+        "--precision",
+        "-p",
+        help="Model quantization precision: 'BF16', 'FP16', 'AWQ_INT4', 'INT8'.",
+    ),
+    output_dir: Path = typer.Option(
+        Path("reports"),
+        "--output-dir",
+        "-o",
+        help="Directory to persist markdown serving benchmark report.",
+    ),
+) -> None:
+    """Simulate self-hosted vLLM inference serving, hardware sizing, concurrency ramp, and cost crossover."""
+    console.print(Panel("[bold cyan]MSU LLM Inference Workbench — vLLM Serving & Concurrency Simulation[/bold cyan]", expand=False))
+
+    # 1. Resolve architecture, hardware, and precision
+    model_arch = get_model_architecture(model_id)
+    gpu_profile = get_hardware_profile(hardware)
+    try:
+        quant_prec = QuantizationPrecision(precision.upper())
+    except ValueError:
+        quant_prec = QuantizationPrecision.BF16
+
+    console.print(
+        f"[bold]Target Model:[/] {model_arch.display_name} ({model_arch.param_count_billions}B params, {quant_prec.value})\n"
+        f"[bold]Hardware:[/] {tp}x {gpu_profile.name} (Total VRAM: {gpu_profile.vram_gb * tp:.1f} GB)\n"
+    )
+
+    # 2. Run simulation
+    simulator = ServingBenchmarkSimulator()
+    report = simulator.simulate_ramp(
+        model=model_arch,
+        gpu=gpu_profile,
+        precision=quant_prec,
+        tensor_parallel_size=tp,
+    )
+
+    # 3. Memory Sizing Breakdown Table
+    sizing = report.sizing
+    sizing_table = Table(title="Hardware Memory Sizing & KV-Cache Allocation", show_header=True, header_style="bold magenta")
+    sizing_table.add_column("Subsystem / Component", style="bold")
+    sizing_table.add_column("Memory Allocated", justify="right")
+    sizing_table.add_column("% of Total VRAM", justify="right")
+    sizing_table.add_column("Engineering Context / Notes", style="dim")
+
+    tot_vram = max(0.1, sizing.total_gpu_vram_gb)
+    sizing_table.add_row(
+        "Model Parameters",
+        f"{sizing.weights_memory_gb:.2f} GB",
+        f"{sizing.weights_memory_gb / tot_vram * 100:.1f}%",
+        f"Quantized weights ({quant_prec.value}) with 5% framework padding",
+    )
+    sizing_table.add_row(
+        "CUDA Context & Runtime",
+        f"{sizing.cuda_runtime_overhead_gb:.2f} GB",
+        f"{sizing.cuda_runtime_overhead_gb / tot_vram * 100:.1f}%",
+        f"Static PyTorch runtime and NCCL comm buffers ({tp} GPUs)",
+    )
+    sizing_table.add_row(
+        "Activation Buffer",
+        f"{sizing.activation_overhead_gb:.2f} GB",
+        f"{sizing.activation_overhead_gb / tot_vram * 100:.1f}%",
+        "Dynamic intermediate layer activations (PagedAttention)",
+    )
+    sizing_table.add_row(
+        "Available KV-Cache",
+        f"{sizing.kv_cache_allocated_gb:.2f} GB",
+        f"{sizing.kv_cache_allocated_gb / tot_vram * 100:.1f}%",
+        f"{sizing.kv_cache_per_token_bytes:.1f} B/token. Max {sizing.max_concurrent_sessions_8k} concurrent 8k sessions",
+    )
+    dep_color = "green" if sizing.is_deployable else "bold red"
+    sizing_table.add_row(
+        "Total Cluster Allocation",
+        f"{sizing.total_memory_required_gb:.2f} / {sizing.total_gpu_vram_gb:.1f} GB",
+        f"[{dep_color}]{'DEPLOYABLE' if sizing.is_deployable else 'OOM'}[/{dep_color}]",
+        sizing.limiting_factor,
+    )
+    console.print(sizing_table)
+    console.print("")
+
+    # 4. Concurrency Ramp Table
+    ramp_table = Table(title="Progressive Concurrency Ramp Simulation (1 to 150 Workers)", show_header=True, header_style="bold cyan")
+    ramp_table.add_column("Workers", justify="right", style="bold")
+    ramp_table.add_column("Throughput", justify="right")
+    ramp_table.add_column("Mean TTFT", justify="right")
+    ramp_table.add_column("P95 TTFT", justify="right")
+    ramp_table.add_column("Mean TPOT", justify="right")
+    ramp_table.add_column("P95 Latency", justify="right")
+    ramp_table.add_column("KV Util", justify="right")
+    ramp_table.add_column("Preempt %", justify="right")
+    ramp_table.add_column("SLA Adherence", justify="right")
+
+    for step in report.concurrency_ramp:
+        sla_color = "green" if step.sla_adherence_pct >= 95.0 else ("yellow" if step.sla_adherence_pct >= 80.0 else "red")
+        ramp_table.add_row(
+            str(step.concurrency_level),
+            f"{step.output_tokens_per_second:.1f} tok/s",
+            f"{step.mean_ttft_ms:.0f} ms",
+            f"{step.p95_ttft_ms:.0f} ms",
+            f"{step.mean_tpot_ms:.1f} ms",
+            f"{step.p95_total_latency_ms / 1000.0:.2f} s",
+            f"{step.kv_cache_utilization_pct:.1f}%",
+            f"{step.preemption_rate_pct:.1f}%",
+            f"[{sla_color}]{step.sla_adherence_pct:.1f}%[/{sla_color}]",
+        )
+    console.print(ramp_table)
+    console.print("")
+
+    # 5. Cost-Crossover Analysis
+    cost_analyzer = CostCrossoverAnalyzer()
+    # Comparison against Google Gemini Flash ($0.075 / $0.30)
+    cost_comp = cost_analyzer.analyze(
+        model=model_arch,
+        gpu=gpu_profile,
+        cloud_api_input_per_1m=Decimal("0.0750"),
+        cloud_api_output_per_1m=Decimal("0.3000"),
+        tensor_parallel_size=tp,
+        estimated_monthly_msu_queries=60000,
+    )
+
+    cost_table = Table(title="Cost Crossover Analysis (Self-Hosted GPU vs. Cloud API)", show_header=True, header_style="bold yellow")
+    cost_table.add_column("Evaluation Parameter", style="bold")
+    cost_table.add_column("Value / Metric", justify="right")
+    cost_table.add_column("Strategic Implication", style="dim")
+
+    cost_table.add_row(
+        "Dedicated GPU Cluster Cost",
+        f"${cost_comp.monthly_hosting_cost_usd:,.2f} / month",
+        f"${cost_comp.gpu_hourly_cost_usd:.2f}/hr base + 15% network/storage buffer",
+    )
+    cost_table.add_row(
+        "Cloud API Cost Per Query",
+        f"${cost_comp.cost_per_query_cloud_usd:.6f} / query",
+        f"Based on {cost_comp.avg_prompt_tokens} prompt / {cost_comp.avg_completion_tokens} completion tokens",
+    )
+    cost_table.add_row(
+        "Break-Even Volume Threshold",
+        f"{cost_comp.break_even_monthly_queries:,} queries/mo",
+        f"Equivalent to {cost_comp.break_even_daily_queries:,} student queries per day",
+    )
+    viab_color = "green" if cost_comp.is_economically_viable_for_msu else "yellow"
+    cost_table.add_row(
+        "Economic Viability for MSU",
+        f"[{viab_color}]{'VIABLE' if cost_comp.is_economically_viable_for_msu else 'UNJUSTIFIED'}[/{viab_color}]",
+        "MSU peak intake traffic (~2,000/day = 60k/month)",
+    )
+    console.print(cost_table)
+
+    console.print(f"\n[bold]Recommendation:[/] {cost_comp.recommendation_summary}\n")
+
+    # 6. Save Report
+    report_file = ServingReportGenerator.save_report(report, cost_comp, output_dir)
+    console.print(f"[bold green]✓[/bold green] Serving benchmark report saved to [bold cyan]{report_file}[/bold cyan]")
+
+
 if __name__ == "__main__":
     app()
+

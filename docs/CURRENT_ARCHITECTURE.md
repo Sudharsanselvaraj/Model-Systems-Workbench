@@ -1,4 +1,4 @@
-# MSU LLM Inference Workbench — Complete System Architecture (Phases 0–5)
+# MSU LLM Inference Workbench — Complete System Architecture (Phases 0–6)
 
 ```mermaid
 graph TB
@@ -12,6 +12,7 @@ graph TB
         CLI --> CMD_Validate["validate-dataset"]
         CLI --> CMD_Benchmark["benchmark & compare-runs"]
         CLI --> CMD_BenchmarkRAG["benchmark-rag"]
+        CLI --> CMD_Serving["simulate-serving"]
         CLI --> CMD_Traces["import-traces"]
         CLI --> CMD_Budget["budget status"]
         CLI --> CMD_Models["models list"]
@@ -73,8 +74,19 @@ graph TB
         Analyzer --> Class_Healthy["5. NO_FAILURE_DETECTED"]
     end
 
+    %% Phase 6 Subsystems
+    subgraph Phase6["6. Inference Serving Simulation & Sizing (Phase 6)"]
+        HardwareSpec["Hardware Profiles (H100, A100, Mac Studio)"]
+        ServingEngine["Serving Simulator (vLLM Engine Specs)"]
+        KVCalc["KV-Cache & Memory Footprint Calculator"]
+        RampSim["Concurrency Ramp Simulator (1 to 150 Workers)"]
+        Crossover["Cost Crossover Analysis (Hosted vs Cloud GPU)"]
+
+        HardwareSpec --> ServingEngine --> KVCalc --> RampSim --> Crossover
+    end
+
     %% Storage & Persistence Layer
-    subgraph Storage["6. Local Storage & Artifacts (Zero-Network)"]
+    subgraph Storage["7. Local Storage & Artifacts (Zero-Network)"]
         SQLite[("Local SQLite Database (workbench.db - WAL Mode)")]
         LedgerTbl["budget_ledger (Transactions & Micro-USD Spend)"]
         RunsTbl["evaluation_runs (Aggregated Run Metrics)"]
@@ -92,12 +104,14 @@ graph TB
         Provider --> LedgerTbl
         Analyzer --> Reports
         Validator --> Reports
+        Crossover --> Reports
     end
 ```
 
 ---
 
 ## Component Interaction Lifecycles
+
 
 ### A. Model Evaluation & Spend Lifecycle (Phase 3)
 
@@ -174,14 +188,15 @@ sequenceDiagram
 
 ---
 
-## Subsystem Matrix (Phases 0 to 5)
+## Subsystem Matrix (Phases 0 to 6)
 
 | Subsystem | Primary Python Modules | CLI Command | Core Safety / Invariant |
 |---|---|---|---|
 | **Audit & Remediation** | `msu_llm_lab.audit.*`<br/>`msu_llm_lab.remediation.*` | `msu-llm-lab audit-kb`<br/>`msu-llm-lab remediate-kb` | Source KB is read-only; SHA-256 hashed before and after. Never auto-resolves contradictions. |
 | **Dataset Governance** | `msu_llm_lab.schemas.*`<br/>`msu_llm_lab.dataset.*` | `msu-llm-lab validate-dataset` | Verified cases require explicit source citations. N-gram detector prevents cross-split leakage. |
 | **Evaluation & Providers** | `msu_llm_lab.providers.*`<br/>`msu_llm_lab.evaluation.*` | `msu-llm-lab benchmark`<br/>`msu-llm-lab compare-runs` | Fail-closed gate blocks non-public cases. Dry-run by default. Preflight budget limits enforced. |
-| **Decoupled RAG Benchmark** | `msu_llm_lab.rag.*` | `msu-llm-lab benchmark-rag` | Evaluates retrieval (hit rate/precision) independently from generation (correctness/groundedness). |
+| **Decoupled RAG Benchmark** | `msu_llm_lab.rag.*` | `msu-llm-lab benchmark-rag` | Evaluates retrieval (Recall@k, Precision@k, MRR) against 3,030 clean audited KB records; isolates abstention denominator (v2.1 baseline). |
 | **Trace Diagnostics** | `msu_llm_lab.traces.*` | `msu-llm-lab import-traces` | PII and API keys redacted offline. Classifications labeled as candidate hypotheses, not ground truth. |
+| **Inference Serving & Sizing** | `msu_llm_lab.serving.*` | `msu-llm-lab simulate-serving` | Hardware sizing, KV-cache footprint, concurrency ramp (1–150 workers), and cloud vs self-hosted cost crossover. |
 | **Spend Governance** | `msu_llm_lab.core.budget`<br/>`msu_llm_lab.storage.db` | `msu-llm-lab budget status` | Exact `Decimal` arithmetic and integer micro-dollars. Local governance ceilings ($0.50/$2.00/$10.00). |
 | **Interactive Terminal** | `msu_llm_lab.tui.*` | `msu-llm-lab ui` | Hardware telemetry, tab navigation, model catalog, and budget ledger inspection. |

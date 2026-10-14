@@ -56,14 +56,14 @@ def build_top_header() -> Table:
     header.add_column("right", justify="right", width=26, no_wrap=True)
 
     left_text = Text()
-    left_text.append("[MSU] ", style=f"bold {TEXT_PRIMARY}")
+    left_text.append("[MSU] ", style=f"bold {CYAN_HIGHLIGHT}")
     left_text.append("LLM INFERENCE WORKBENCH ", style=f"bold {TEXT_PRIMARY}")
     left_text.append("v0.1.0", style=f"{TEXT_MUTED}")
 
     center_text = Text()
     center_text.append("Project: msu-llm-lab  |  ", style=f"{TEXT_SECONDARY}")
     center_text.append("Mode: ", style=f"{TEXT_SECONDARY}")
-    center_text.append("DRY RUN ", style=f"bold {TEXT_PRIMARY}")
+    center_text.append("DRY RUN ", style=f"bold {COLOR_SUCCESS}")
     center_text.append("(Zero API Spend)", style=f"{TEXT_MUTED}")
 
     now_str = datetime.now().strftime("%a %d %b %Y  %H:%M:%S")
@@ -175,13 +175,13 @@ def _build_histogram_metric_cell(
     # Line 2: 100 ┤ <top tier bars>
     l2 = Text()
     l2.append(f"{y_max} ┤ ", style=f"{TEXT_MUTED}")
-    l2.append(top_tier, style=f"{TEXT_PRIMARY}")
+    l2.append(top_tier, style=f"bold {BORDER_FOCUSED}")
     cell.add_row(l2)
 
     # Line 3:  50 ┤ <bottom tier bars>
     l3 = Text()
     l3.append(f"{y_mid} ┤ ", style=f"{TEXT_MUTED}")
-    l3.append(bot_tier, style=f"{TEXT_PRIMARY}")
+    l3.append(bot_tier, style=f"{TEXT_SECONDARY}")
     cell.add_row(l3)
 
     # Line 4:   0 └─ <baseline>
@@ -453,7 +453,7 @@ def build_model_catalogue_panel(
         else selected_candidate.experimental_purpose
     )
     col2.append(f"{desc_text}\n\n", style=f"{TEXT_PRIMARY}")
-    col2.append("⚠ Model ID and pricing require live provider verification in a future step.\nCurrently for planning only.", style=f"{TEXT_SECONDARY} italic")
+    col2.append("! Model ID and pricing require live provider verification in a future step.\nCurrently for planning only.", style=f"{TEXT_SECONDARY} italic")
 
     # Col 3: Capabilities
     col3 = Text()
@@ -558,7 +558,7 @@ def build_dataset_validation_panel(is_focused: bool) -> Panel:
     kb_table.add_column("Status", justify="center", width=8)
     kb_table.add_column("Coverage / Role", style=f"{TEXT_SECONDARY}")
 
-    kb_table.add_row("MSU General KB", "222 Q&A pairs", "138e6893a1d54f36...", f"[bold {TEXT_PRIMARY}]PASS[/]", "Campus, admissions, faculties, general policies")
+    kb_table.add_row("MSU General KB", "241 Q&A pairs", "9fbd1673a70db54d...", f"[bold {TEXT_PRIMARY}]PASS[/]", "Campus, admissions, faculties, general policies")
     kb_table.add_row("MSU Programmes KB", "2,810 Q&A pairs", "a46773fea196d8fe...", f"[bold {TEXT_PRIMARY}]PASS[/]", "Academic degrees, tuition fees, career outcomes")
     grid.add_row(kb_table)
 
@@ -1230,29 +1230,29 @@ def build_footer_bar(status: BudgetStatus) -> Table:
     grid.add_column("right", justify="right", ratio=4)
 
     left = Text()
-    left.append("↑/↓ ", style=f"bold {TEXT_PRIMARY}")
+    left.append("↑/↓ ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Navigate  ", style=f"{TEXT_SECONDARY}")
-    left.append("Enter ", style=f"bold {TEXT_PRIMARY}")
+    left.append("Enter ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Select  ", style=f"{TEXT_SECONDARY}")
-    left.append("←/→ ", style=f"bold {TEXT_PRIMARY}")
+    left.append("←/→ ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Pane  ", style=f"{TEXT_SECONDARY}")
-    left.append("Tab ", style=f"bold {TEXT_PRIMARY}")
+    left.append("Tab ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Focus  ", style=f"{TEXT_SECONDARY}")
-    left.append("/ ", style=f"bold {TEXT_PRIMARY}")
+    left.append("/ ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Search  ", style=f"{TEXT_SECONDARY}")
-    left.append("r ", style=f"bold {TEXT_PRIMARY}")
+    left.append("r ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Refresh  ", style=f"{TEXT_SECONDARY}")
-    left.append("? ", style=f"bold {TEXT_PRIMARY}")
+    left.append("? ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Help  ", style=f"{TEXT_SECONDARY}")
-    left.append("q ", style=f"bold {TEXT_PRIMARY}")
+    left.append("q ", style=f"bold {CYAN_HIGHLIGHT}")
     left.append("Quit", style=f"{TEXT_SECONDARY}")
 
     right = Text()
-    right.append("Dry-run", style=f"bold {TEXT_PRIMARY}")
+    right.append("Dry-run", style=f"bold {COLOR_SUCCESS}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
     right.append("No API calls", style=f"{TEXT_SECONDARY}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
-    right.append(f"Budget: ${status.remaining_total_usd:.2f}", style=f"bold {TEXT_PRIMARY}")
+    right.append(f"Budget: ${status.remaining_total_usd:.2f}", style=f"bold {CYAN_HIGHLIGHT}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
     right.append("DB: SQLite WAL", style=f"{TEXT_SECONDARY}")
 

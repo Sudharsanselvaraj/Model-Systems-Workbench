@@ -1,5 +1,4 @@
-"""Parser for MSU Knowledge Base Markdown documents."""
-
+import hashlib
 import re
 from pathlib import Path
 from typing import List, Tuple, Optional
@@ -52,6 +51,7 @@ class KBParser:
 
     def __init__(self, source_path: Path):
         self.source_path = Path(source_path)
+        self.source_file_hash: str = ""
         self.lines: List[str] = []
         self.raw_question_markers: int = 0
         self.raw_answer_markers: int = 0
@@ -63,6 +63,8 @@ class KBParser:
         """Parses the source file into structured records and metadata."""
         with open(self.source_path, "r", encoding="utf-8") as f:
             content = f.read()
+
+        self.source_file_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()
 
         # Count raw markers across full text
         self.raw_question_markers = len(list(Q_MARKER_REGEX.finditer(content)))
@@ -116,6 +118,28 @@ class KBParser:
             is_multiline = (end_line > start_line)
             is_inline = has_question_tag and has_answer_tag and len(question_lines) > 0 and len(answer_lines) > 0 and (question_lines[0][0] == answer_lines[0][0])
 
+            # Determine parsing status and validation warnings
+            warnings = []
+            if not has_question_tag:
+                warnings.append("MISSING_QUESTION_TAG")
+            elif not q_clean:
+                warnings.append("EMPTY_QUESTION_CONTENT")
+            if not has_answer_tag:
+                warnings.append("MISSING_ANSWER_TAG")
+            elif not a_clean:
+                warnings.append("EMPTY_ANSWER_CONTENT")
+            if answer_marker_count > 1:
+                warnings.append("REPETITIVE_ANSWER_MARKERS")
+
+            if not q_clean and not a_clean:
+                status = "INVALID"
+            elif any(w in warnings for w in ("MISSING_QUESTION_TAG", "MISSING_ANSWER_TAG", "EMPTY_QUESTION_CONTENT", "EMPTY_ANSWER_CONTENT")):
+                status = "INCOMPLETE"
+            elif warnings:
+                status = "VALID_WITH_WARNINGS"
+            else:
+                status = "VALID"
+
             record = KBRecord(
                 record_id=rec_id,
                 source_file=str(self.source_path),
@@ -133,6 +157,9 @@ class KBParser:
                 is_multiline=is_multiline,
                 is_inline=is_inline,
                 answer_marker_count=max(answer_marker_count, 1 if has_answer_tag else 0),
+                source_file_hash=self.source_file_hash,
+                parsing_status=status,
+                validation_warnings=warnings,
             )
             self.records.append(record)
 

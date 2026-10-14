@@ -29,6 +29,13 @@ class VerificationStatus(str, Enum):
     DISPUTED = "DISPUTED"
 
 
+class SourceProvenanceStatus(str, Enum):
+    """Source provenance status for evaluation cases."""
+    SOURCE_VERIFIED = "SOURCE_VERIFIED"
+    SYNTHETIC = "SYNTHETIC"
+    UNRESOLVED = "UNRESOLVED"
+
+
 class DifficultyLevel(str, Enum):
     """Categorized query complexity level."""
     EASY = "EASY"
@@ -92,6 +99,33 @@ class EvaluationCase(BaseModel):
     )
     split: DatasetSplit = Field(default=DatasetSplit.UNASSIGNED)
     verification: VerificationRecord = Field(default_factory=VerificationRecord)
+    
+    # Grounded Provenance Tracking
+    source_status: SourceProvenanceStatus = Field(
+        default=SourceProvenanceStatus.SYNTHETIC,
+        description="SOURCE_VERIFIED (grounded in audited KB), SYNTHETIC (fixture), or UNRESOLVED (missing/unsupported in KB)"
+    )
+    relevant_record_ids: List[str] = Field(
+        default_factory=list,
+        description="Stable parsed-KB record IDs that ground the correct answer."
+    )
+    source_file: Optional[str] = Field(
+        default=None,
+        description="Source KB Markdown filename containing grounding records."
+    )
+    source_line_range: Optional[str] = Field(
+        default=None,
+        description="Line range in source KB Markdown file (e.g. '11333-11354')."
+    )
+    abstention_expected: bool = Field(
+        default=False,
+        description="True if the KB lacks the facts and the system is expected to abstain/refer."
+    )
+    expected_claims: List[str] = Field(
+        default_factory=list,
+        description="Factual assertions that must be present in the answer."
+    )
+    
     expected_context: Optional[str] = Field(
         default=None,
         description="Authoritative grounding context/chunks that the retriever is expected to fetch."

@@ -5,10 +5,12 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from msu_llm_lab.audit.models import IssueSeverity, IssueCategory
+from msu_llm_lab.audit.models import IssueSeverity, IssueCategory, FindingStatus
 from msu_llm_lab.audit.parser import KBParser, clean_text, unescape_markdown
-from msu_llm_lab.audit.validator import KBValidator
+from msu_llm_lab.audit.validator import KBValidator, CrossKBValidator, redact_sensitive
 from msu_llm_lab.audit.reporter import KBReporter
+from msu_llm_lab.dataset.manager import DatasetManager
+from msu_llm_lab.schemas.evaluation import EvaluationCase, DatasetSplit, VerificationStatus, DataClassification
 from msu_llm_lab.cli import app, compute_sha256
 
 runner = CliRunner()
@@ -289,4 +291,136 @@ def test_cli_dry_run_and_report_generation(tmp_kb_dir: Path):
 
     # Verify CSV has expected headers
     csv_text = csv_files[0].read_text(encoding="utf-8")
-    assert "issue_id,source_file,start_line,end_line,severity" in csv_text
+    assert "issue_id,source_file,record_id,start_line,end_line,severity" in csv_text
+
+
+def test_cross_kb_validation_synthetic(tmp_kb_dir: Path):
+    """Verify detection of cross-KB programme omissions and ungrounded financial aid."""
+    gen_content = (
+        "# \\# General Information\n\n"
+        "## \\#\\# Programmes Offered\n\n"
+        "\\*\\*Question:\\*\\* What degrees are available?\n\n"
+        "\\*\\*Answer:\\*\\* Bachelor in Software Engineering only.\n\n"
+        "## \\#\\# Financial Aid\n\n"
+        "\\*\\*Question:\\*\\* What is PTPTN? PTPTN is federal education loan.\n"  # Missing answer tag
+    )
+    prog_content = (
+        "# \\# Bachelor in Software Engineering\n\n"
+        "\\*\\*Question:\\*\\* What is Bachelor in Software Engineering?\n\n"
+        "\\*\\*Answer:\\*\\* A 3-year computing degree.\n\n"
+        "# \\# Bachelor in Biomedical Science\n\n"
+        "\\*\\*Question:\\*\\* What is Bachelor in Biomedical Science?\n\n"
+        "\\*\\*Answer:\\*\\* A healthcare science programme.\n"
+    )
+    gen_file = tmp_kb_dir / "syn_gen.md"
+    prog_file = tmp_kb_dir / "syn_prog.md"
+    gen_file.write_text(gen_content, encoding="utf-8")
+    prog_file.write_text(prog_content, encoding="utf-8")
+
+    p_gen = KBParser(gen_file)
+    _, _, recs_g, heads_g, orphans_g = p_gen.parse()
+
+    p_prog = KBParser(prog_file)
+    _, _, recs_p, heads_p, orphans_p = p_prog.parse()
+
+    cross_val = CrossKBValidator(str(gen_file), recs_g, heads_g, str(prog_file), recs_p, heads_p)
+    cross_issues = cross_val.validate_cross_kb()
+
+    # Should detect Biomedical Science missing from General KB
+    omissions = [i for i in cross_issues if i.issue_code == "CROSS_KB_PROGRAMME_OMISSION"]
+    assert len(omissions) >= 1
+    assert any("Biomedical Science" in i.programme for i in omissions)
+
+    # Should detect ungrounded financial aid entry
+    fa_issues = [i for i in cross_issues if i.issue_code == "CROSS_KB_UNGROUNDED_FINANCIAL_AID"]
+    assert len(fa_issues) == 1
+    assert fa_issues[0].severity == IssueSeverity.ERROR
+    assert fa_issues[0].status == FindingStatus.CONFIRMED
+
+
+def test_dataset_provenance_and_grounding(tmp_kb_dir: Path):
+    """Verify evaluation cases validate against schema and detect untraceable sources."""
+    case_data = EvaluationCase(
+        id="syn-eval-001",
+        query="What is the fee for Bachelor in Software Engineering?",
+        expected_answer="RM 45,000 across 3 years.",
+        programme_category="Computing",
+        difficulty="MEDIUM",
+        classification=DataClassification.SYNTHETIC,
+        split=DatasetSplit.DEV,
+        verification={"status": VerificationStatus.VERIFIED, "reference_source": "Synthetic Prospectus 2026"},
+        tags=["computing", "fees"],
+        metadata={"source_record_id": None},
+    )
+    eval_file = tmp_kb_dir / "eval_sample.jsonl"
+    DatasetManager.save_jsonl([case_data], eval_file)
+
+    loaded = DatasetManager.load_jsonl(eval_file)
+    assert len(loaded) == 1
+    assert loaded[0].id == "syn-eval-001"
+    # Verify synthetic cases without bound local KB record IDs are identifiable
+    assert loaded[0].metadata.get("source_record_id") is None
+
+
+def test_deterministic_pipeline_repeatability(tmp_kb_dir: Path):
+    """Verify that multiple consecutive parser and validator runs produce identical outputs."""
+    content = (
+        "# \\# Doctor of Philosophy (Applied Science)\n\n"
+        "\\*\\*Question:\\*\\* How much are the fees?\n\n"
+        "\\*\\*Answer:\\*\\* Fee is RM62,500. You can divide RM63,500 by years.\n"
+    )
+    kb_file = tmp_kb_dir / "determinism.md"
+    kb_file.write_text(content, encoding="utf-8")
+
+    # Run 1
+    p1 = KBParser(kb_file)
+    q1, a1, recs1, heads1, orph1 = p1.parse()
+    v1 = KBValidator(str(kb_file), recs1, heads1, orph1)
+    issues1 = v1.validate_all()
+
+    # Run 2
+    p2 = KBParser(kb_file)
+    q2, a2, recs2, heads2, orph2 = p2.parse()
+    v2 = KBValidator(str(kb_file), recs2, heads2, orph2)
+    issues2 = v2.validate_all()
+
+    assert q1 == q2 == 1
+    assert a1 == a2 == 1
+    assert len(recs1) == len(recs2) == 1
+    assert len(issues1) == len(issues2) == 1
+    assert issues1[0].issue_code == issues2[0].issue_code == "CONFLICTING_TUITION_FEES"
+    assert issues1[0].status == issues2[0].status == FindingStatus.OFFICIAL_VERIFICATION_REQUIRED
+
+
+def test_redact_sensitive_credentials_and_pii():
+    """Verify redaction utility cleans personal email, phone numbers, and secrets."""
+    raw = "Contact admin at counsellor.test@msu.edu.my or call +60123456789. Key: api_key=sk-live-12345"
+    sanitized = redact_sensitive(raw)
+
+    assert "counsellor.test@msu.edu.my" not in sanitized
+    assert "[REDACTED_EMAIL]" in sanitized
+    assert "+60123456789" not in sanitized
+    assert "[REDACTED_PHONE]" in sanitized
+    assert "sk-live-12345" not in sanitized
+    assert "[REDACTED_SECRET]" in sanitized
+
+
+def test_strict_protection_against_source_corruption(tmp_kb_dir: Path):
+    """Verify that file content and digest remain strictly identical byte-for-byte."""
+    content = "# \\# Immutable Source\n\n\\*\\*Question:\\*\\* Immutable?\n\n\\*\\*Answer:\\*\\* Yes.\n"
+    kb_file = tmp_kb_dir / "strict_immutable.md"
+    kb_file.write_text(content, encoding="utf-8")
+
+    pre_hash = hashlib.sha256(kb_file.read_bytes()).hexdigest()
+    pre_bytes = kb_file.read_bytes()
+
+    parser = KBParser(kb_file)
+    q, a, recs, heads, orph = parser.parse()
+    validator = KBValidator(str(kb_file), recs, heads, orph)
+    validator.validate_all()
+
+    post_hash = hashlib.sha256(kb_file.read_bytes()).hexdigest()
+    post_bytes = kb_file.read_bytes()
+
+    assert pre_hash == post_hash
+    assert pre_bytes == post_bytes

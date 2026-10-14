@@ -1,6 +1,6 @@
 # Implementation Plan: MSU LLM Research Workbench (`msu-llm-lab`)
 
-**Status**: Phase 0 — Roadmap & Engineering Plan (Approved with Corrections)  
+**Status**: Phases 0–6 Complete; Benchmark v2.1 Baseline Hardened; Phase 7 Next  
 **Date**: October 2026  
 
 ---
@@ -50,137 +50,45 @@ graph TD
 
 ---
 
-### Phase 1: Knowledge-Base Audit CLI *(Current Target)*
+### Phase 1: Knowledge-Base Audit CLI *(Complete)*
 * **Command**: `msu-llm-lab audit-kb [OPTIONS] [FILE_PATH]`
-* **Objective**: Parse the supplied markdown files, reconcile raw regex marker counts vs parsed structural records, validate question-and-answer structure, identify formatting anomalies, detect duplicate questions, highlight conflicting figures, and generate audit reports without modifying source files.
-* **Deliverables**:
-  - Parsing module (`msu_llm_lab.audit.parser`) supporting escaped markdown tags (`\*\*Question:\*\*`, `\*\*Answer:\*\*`, `\#\#`) and inline/multiline entries.
-  - Validation engine (`msu_llm_lab.audit.validator`) with deterministic rules and heuristic detectors.
-  - Reporting module (`msu_llm_lab.audit.reporter`) outputting CSV issue logs and Markdown summaries into `reports/`.
-  - Typer CLI command: `msu-llm-lab audit-kb` with `--dry-run`, `--format [csv|json|md]`, and `--output-dir` options.
-  - Automated test suite (`tests/test_audit.py`) covering:
-    - Valid single-turn and multi-turn entries.
-    - Missing answer fields and empty question fields.
-    - Duplicate questions (exact and normalized text).
-    - Conflicting numeric amounts (e.g., fee discrepancies).
-    - Malformed markdown and stray tokens (e.g. `cou`).
-    - Source immutability verification.
-* **Acceptance Criteria**:
-  - Original source files remain 100% untouched (verified by SHA-256 hash checks before and after).
-  - Parser explicitly distinguishes raw marker counts, parsed records, and validated defects (no hardcoded counts as ground truth).
-  - Both deterministic errors and heuristic warnings are distinctly categorized.
-  - Both supplied knowledge-base files audit successfully with complete issue logs generated in `reports/`.
-  - Never automatically alters or decides which conflicting fee or requirement is correct.
-  - All automated unit and integration tests pass.
-* **Dependencies**: Phase 0 approval, Git repository initialization, `.gitignore` setup, Python environment setup.
+* **Status**: Complete. 3,051 parsed records (241 General KB, 2,810 Programmes KB), deterministic and heuristic validators, versioned clean copies without touching sources.
 
 ---
 
-### Phase 2: Evaluation Dataset and Schemas
+### Phase 2: Evaluation Dataset and Schemas *(Complete)*
 * **Command**: `msu-llm-lab validate-dataset [OPTIONS] DATASET_FILE`
-* **Objective**: Define formal Pydantic schemas for evaluation cases, ground truth, and scoring; implement dataset management with strict train/dev/test partitioning and cross-split leakage prevention.
-* **Deliverables**:
-  - Pydantic schema models:
-    - `EvaluationCase`: ID, query, category, difficulty, data classification (`PUBLIC`, `SYNTHETIC`, `INTERNAL`, `CONFIDENTIAL`, `UNCLASSIFIED`).
-    - `VerificationRecord`: Status (`UNVERIFIED`, `VERIFIED`, `DISPUTED`), reference source, verifier.
-    - `ModelExecutionRecord`: Model ID, prompt version, output text, latency, token usage, cost.
-    - `EvaluationScore`: Rubric-based scores for accuracy, groundedness, and format.
-  - Dataset manager (`msu_llm_lab.dataset`) for reading and writing JSONL files.
-  - Leakage detector (`msu_llm_lab.dataset.leakage`) using lexical and n-gram overlap heuristics to prevent cross-split contamination.
-  - CLI command `msu-llm-lab validate-dataset` to validate schema conformance and flag leakage.
-  - Safe initial seed dataset containing verified synthetic/sample cases (clearly labeled as synthetic).
-  - Automated tests (`tests/test_schemas.py`) covering valid records, invalid types, unverified ground truth rejection, and leakage detection.
-* **Acceptance Criteria**:
-  - Schema rejects any record attempting to claim verified status without an explicit source citation.
-  - Unclassified data defaults to blocked classification.
-  - Cross-split contamination between train/dev/test is detected and reported.
-  - All tests pass.
-* **Dependencies**: Phase 1 approval.
+* **Status**: Complete. Pydantic schemas, split management (TRAIN/DEV/TEST), n-gram cross-split leakage detector.
 
 ---
 
-### Phase 3: Reproducible OpenRouter Evaluation
+### Phase 3: Reproducible OpenRouter Evaluation *(Complete)*
 * **Command**: `msu-llm-lab benchmark [OPTIONS]` and `msu-llm-lab compare-runs [RUN_A] [RUN_B]`
-* **Objective**: Build a robust provider adapter for OpenRouter with a fail-closed confidentiality gate to benchmark candidate open-weight models on approved, non-sensitive evaluation datasets.
-* **Deliverables**:
-  - Provider interface (`msu_llm_lab.providers.base.BaseProvider`).
-  - OpenRouter adapter (`msu_llm_lab.providers.openrouter.OpenRouterAdapter`):
-    - Reads `OPENROUTER_API_KEY` from environment safely.
-    - Requires explicit `model_id`.
-    - **Fail-Closed Confidentiality Gatekeeper**: Rejects `UNCLASSIFIED`, `INTERNAL`, and `CONFIDENTIAL` records before making network requests. Only explicitly approved `PUBLIC` or `SYNTHETIC` records are permitted.
-    - Configurable timeouts, retry backoff for rate limits (429) and server errors (5xx).
-    - Dry-run mode performing zero network requests.
-    - Raw request/response capture with sanitized secret scrubbers.
-  - Benchmark coordinator (`msu_llm_lab.evaluation.runner`) and metric calculators.
-  - Candidate model license documentation: Distinctly classifies candidate models (e.g. Qwen 2.5 7B under Apache 2.0 vs Llama 3.1 8B under Meta Llama Community License).
-  - SQLite storage for run history and execution metadata.
-  - Automated test suite (`tests/test_providers.py`) using mocked HTTP responses, including tests proving zero outbound network requests for rejected records.
-* **Acceptance Criteria**:
-  - Gatekeeper strictly halts and logs rejection for `UNCLASSIFIED`, `INTERNAL`, or `CONFIDENTIAL` cases.
-  - Tests verify zero network requests on rejected inputs.
-  - No API key or secret appears in logs, outputs, or error messages.
-  - Dry-run mode functions without network access.
-  - Missing provider metrics are explicitly marked `unavailable`.
-  - Mocked tests achieve 100% pass rate with zero API spend.
-* **Dependencies**: Phase 2 approval.
+* **Status**: Complete. OpenRouter adapter, fail-closed confidentiality gatekeeper, budget ledger, rubric evaluation, and dry-run simulation.
 
 ---
 
-### Phase 4: RAG Analysis and Langfuse Export Import *(Decoupled)*
+### Phase 4: RAG Analysis and Langfuse Export Import *(Complete)*
 * **Command**: `msu-llm-lab import-traces [OPTIONS] EXPORT_FILE`
-* **Objective**: Ingest authorized, redacted Langfuse export files (JSON/CSV) to diagnose production failure modes across routing, retrieval, generation, and source knowledge. Can proceed as soon as an export is available without waiting for Phase 3.
-* **Deliverables**:
-  - Redacted trace importer (`msu_llm_lab.traces.importer`) supporting Langfuse JSON and CSV export formats.
-  - Trace validation ensuring trace IDs, observation IDs, parent-child spans, latencies, and token counts are preserved.
-  - Diagnostic engine (`msu_llm_lab.traces.analyzer`) categorizing candidate issues:
-    - Routing failures (misclassified intent).
-    - Retrieval failures (irrelevant context, wrong programme).
-    - Generation failures (unsupported claims, hallucination).
-    - Source knowledge failures (KB inconsistency).
-  - Diagnostic report generator (CSV and Markdown) clearly labeling findings as candidate hypotheses.
-  - CLI command `msu-llm-lab import-traces`.
-  - Automated test suite (`tests/test_traces.py`) using synthetic/redacted trace fixtures.
-* **Acceptance Criteria**:
-  - Importer cleanly parses valid exports and rejects malformed/corrupted files with clear errors.
-  - Diagnostic classifications are distinctly labeled as hypotheses, not ground-truth verdicts.
-  - Zero live dashboard scraping; offline file-based only.
-* **Dependencies**: Phase 2 approval, receipt of authorized redacted trace sample (independent of Phase 3).
+* **Status**: Complete. Redacted JSON/CSV importer, PII scrubber, diagnostic classification across routing, retrieval, generation, and KB failure modes.
 
 ---
 
-### Phase 5: Fine-Tuning Preparation & Feasibility Study
-* **Objective**: Evaluate whether fine-tuning is justified by remaining failure modes (drawing evidence from both Phase 3 benchmarks and Phase 4 trace analyses), select appropriate open-weight base models, specify training methodology (LoRA/QLoRA), and create training manifests without launching jobs.
-* **Deliverables**:
-  - Comprehensive Fine-Tuning Feasibility Report addressing:
-    1. Nature of recurring model failures (after prompt and RAG tuning).
-    2. Base model selection (open-weight, documented license terms, e.g., Qwen 2.5 7B under Apache 2.0 or Llama 3.1 8B under Meta Community License).
-    3. Dataset sufficiency and representation analysis.
-    4. SFT / LoRA / QLoRA hyperparameter configuration.
-    5. GPU memory, storage, and cost estimate (RunPod / usage-based compute).
-    6. Held-out evaluation and regression testing strategy.
-  - Training dataset preparation script and manifest generator.
-  - Safeguard confirmation: Requires explicit, multi-step user confirmation before any training script or GPU allocation can be initiated.
-* **Acceptance Criteria**:
-  - Complete, evidence-based report answering all technical criteria.
-  - Zero unauthorized GPU instances launched or costs incurred.
-* **Dependencies**: Phase 3 and/or Phase 4 evidence, team review.
+### Phase 5: Decoupled RAG Benchmarking & Ground-Truth Provenance *(Complete — Benchmark v2.1 Baseline)*
+* **Command**: `msu-llm-lab benchmark-rag [OPTIONS]`
+* **Status**: Complete. Replaced context-leakage retriever with uncontaminated BM25 index built directly from 3,030 clean audited KB records (21 defective records excluded under manifest policy). Ground-truth provenance partitioned into 3 verified source cases and 5 unresolved abstention cases. Metrics report Recall@k, Precision@k, MRR, and isolated Abstention Accuracy across top-2, 3, 5, 10.
 
 ---
 
-### Phase 6: Inference Serving & Concurrency Benchmark Proposal
-* **Objective**: Formulate a rigorous, self-hosted inference evaluation methodology using vLLM to measure latency, throughput, concurrency (targeting 100+ concurrent requests), and GPU resource utilization.
-* **Deliverables**:
-  - Inference evaluation specification detailing:
-    - Target serving engine: vLLM with OpenAI-compatible API.
-    - Concurrency test ramp: 1, 5, 10, 25, 50, 100, 150 concurrent workers.
-    - Metrics: p50, p95, p99 latency, TTFT, TPOT, requests/sec, tokens/sec.
-    - Resource metrics: GPU memory, KV-cache utilization, prefix-cache hit rates, preemption rate.
-    - Cost modeling: Idle vs active GPU instance pricing, serverless vs dedicated pods.
-  - Synthetic load generation harness (mockable and runnable locally or against approved endpoints).
-* **Acceptance Criteria**:
-  - Realistic testing methodology that tests progressive concurrency rather than assuming 100 concurrent requests work.
-  - Clear cost vs latency tradeoff model.
-* **Dependencies**: Phase 5 approval.
+### Phase 6: Inference Serving & Hardware Sizing Simulation *(Complete)*
+* **Command**: `msu-llm-lab simulate-serving [OPTIONS]`
+* **Status**: Complete. Automated vLLM serving simulation, memory footprint calculations (weights, KV-cache, activations), progressive concurrency ramps (1–150 workers), and cloud vs. on-premise cost crossover analysis across H100, A100, and Mac Studio unified memory profiles.
+
+---
+
+### Phase 7: Local Engineering Dashboard *(Current Target)*
+* **Command**: `msu-llm-lab ui` / `msu-llm-lab dashboard`
+* **Status**: Terminal UI operational via `msu-llm-lab ui` (Textual dashboard with health, model catalog, spend ledger); Streamlit local interface is next.
 
 ---
 

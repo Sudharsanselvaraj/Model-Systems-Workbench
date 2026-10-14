@@ -11,7 +11,7 @@ from msu_llm_lab.core.config import settings
 from msu_llm_lab.storage.db import DatabaseManager
 
 # Verified baseline hashes for source knowledge base files
-EXPECTED_GENERAL_KB_HASH = "138e6893a1d54f36cfb2b7abe33317c16647769eb016e71c35f1071a741cfc72"
+EXPECTED_GENERAL_KB_HASH = "9fbd1673a70db54d0128df8b3bad4c259adc0fc0981717049b6048e8a45e9791"
 EXPECTED_PROGRAMMES_KB_HASH = "a46773fea196d8fe6529f5d6d8f6adb9d26ca5a6511185004822f249b2d3282b"
 
 

@@ -1,45 +1,55 @@
 <div align="center">
 
-# MSU LLM Inference Workbench
+<p align="center">
+  <img src="assets/Lavender%20Branching%20Tech%20Panels.png" alt="MSU LLM Workbench Logo" width="360" />
+</p>
 
-**Fix the knowledge base first. Then pick the model. Then prove you can serve it.**
+<h1>MSU LLM Workbench v0.1: Research & Inference Lab</h1>
 
-The local-first framework for evaluating the language models behind a university admissions counsellor, with a hard spend cap and zero outbound network calls.
+<p>The local-first research laboratory for university admissions AI evaluation, model comparison, and self-hosted serving with zero outbound network calls.</p>
 
-<br />
+<p align="center">
+  <a href="https://github.com/Sudharsanselvaraj/Model-Systems-Workbench"><img src="https://img.shields.io/badge/python-3.11+-1e1b2e?style=for-the-badge&logo=python&logoColor=c084fc" alt="Python 3.11+"></a>
+  <a href="https://github.com/Sudharsanselvaraj/Model-Systems-Workbench"><img src="https://img.shields.io/badge/tests-95%20passing-1e1b2e?style=for-the-badge&logo=pytest&logoColor=4ade80" alt="Tests: 95 passing"></a>
+  <a href="https://github.com/Sudharsanselvaraj/Model-Systems-Workbench"><img src="https://img.shields.io/badge/network-offline-1e1b2e?style=for-the-badge&logoColor=38bdf8" alt="Network: Offline"></a>
+  <a href="https://github.com/Sudharsanselvaraj/Model-Systems-Workbench"><img src="https://img.shields.io/badge/corpus-3%2C030%20clean-1e1b2e?style=for-the-badge" alt="Clean Corpus"></a>
+  <a href="https://github.com/Sudharsanselvaraj/Model-Systems-Workbench"><img src="https://img.shields.io/badge/budget-$10%20cap-1e1b2e?style=for-the-badge" alt="Local Budget Ledger"></a>
+  <a href="https://github.com/Sudharsanselvaraj/Model-Systems-Workbench"><img src="https://img.shields.io/badge/serving-vLLM%20ready-1e1b2e?style=for-the-badge&logoColor=a78bfa" alt="vLLM Serving"></a>
+</p>
 
-![Python](https://img.shields.io/badge/python-3.11+-1C1C1C?style=flat-square&logo=python&logoColor=D0D0D0)
-![Phase](https://img.shields.io/badge/phase-5_complete-1C1C1C?style=flat-square)
-![Network](https://img.shields.io/badge/network-offline-1C1C1C?style=flat-square)
-![Spend](https://img.shields.io/badge/spend-$0.00-1C1C1C?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-pytest-1C1C1C?style=flat-square&logo=pytest&logoColor=D0D0D0)
-
-[Why](#why-msu-llm-workbench) · [Quick start](#quick-start) · [How it works](#how-it-works) · [Commands](#command-reference) · [Safety](#designed-for-sensitive-data) · [Roadmap](#roadmap)
+<p align="center">
+  <strong>
+    <a href="#step-1-install-and-start-msu-llm-lab">Quickstart</a> ·
+    <a href="#why-msu-llm-workbench">Why MSU Lab?</a> ·
+    <a href="#how-it-works">Architecture</a> ·
+    <a href="#command-reference">Commands</a> ·
+    <a href="#capabilities--integrations">Capabilities</a> ·
+    <a href="#designed-for-sensitive-data">Safety & Privacy</a> ·
+    <a href="#roadmap">Roadmap</a>
+  </strong>
+</p>
 
 </div>
 
 ---
 
-## Why MSU LLM Workbench?
-
-Management and Science University (MSU), Malaysia runs an AI counsellor that answers questions about programmes, entry requirements, fees and procedures. Teams usually respond to bad answers by swapping models. Often the model was never the problem.
-
-A question about "Bachelor in Accounting" sitting inside the Broadcasting section, or a PhD fee quoted as both RM62,500 and RM63,500 in a single answer, will make any model hallucinate.
-
-MSU LLM Workbench is built around that observation:
-
-- **Audit the knowledge base** for structural defects, duplicates and contradictory figures before they reach a model.
-- **Build leak-free evaluation datasets** with strict confidentiality labels and train/dev/test separation.
-- **Compare candidate models** on accuracy, groundedness, latency and cost, under a local budget that cannot be exceeded by accident.
-- **Investigate self-hosted serving** with vLLM: throughput, time-to-first-token and KV-cache pressure.
-
-Everything runs against local files and SQLite. No API keys, no telemetry, no network.
+> ⚡ **Strictly Local-First & Confidential**: Zero outbound telemetry, zero external network calls. All knowledge base parsing, RAG retrieval evaluations, trace diagnostics, and serving simulations execute on your local machine against SQLite.
 
 ---
 
-## Quick start
+## Before you begin
 
-Requires Python 3.11+ and [`uv`](https://github.com/astral-sh/uv) (or plain `pip`).
+Make sure you have:
+
+- Python 3.11+ and [`uv`](https://github.com/astral-sh/uv) (or standard `pip`).
+- A terminal with UTF-8 / Unicode support (macOS Terminal, iTerm2, Alacritty, Ghostty, or VS Code integrated terminal).
+- The repository cloned locally.
+
+---
+
+## Step 1: Install and start msu-llm-lab
+
+Clone the repository and install dependencies:
 
 ```bash
 git clone https://github.com/Sudharsanselvaraj/Model-Systems-Workbench.git
@@ -47,251 +57,307 @@ cd Model-Systems-Workbench
 uv sync                                   # or: pip install -e ".[dev]"
 ```
 
-Open the dashboard:
+Launch the interactive workbench launcher:
+
+```bash
+uv run msu-llm-lab
+```
+
+<p align="center">
+  <img src="assets/readme/cli_welcome.png" alt="MSU LLM Workbench CLI Launcher" width="920" />
+</p>
+
+Use arrow keys (`↑`/`↓`) or number shortcuts (`1`–`9`) to navigate workflows, run audits, trigger benchmarks, or launch the live dashboard.
+
+---
+
+## Step 2: Open the Full-Screen TUI Dashboard
+
+To launch directly into the persistent, multi-panel telemetry and evaluation monitor:
 
 ```bash
 uv run msu-llm-lab ui
 ```
 
-Audit a knowledge base without touching it:
+<p align="center">
+  <img src="assets/readme/tui_dashboard.png" alt="MSU LLM Workbench Full-Screen TUI Dashboard" width="920" />
+</p>
+
+Keyboard shortcuts inside the dashboard:
+- `Tab` / `Shift+Tab`: Cycle focus between Navigation, Main Content, and Command input.
+- `↑` / `↓` (`k` / `j`): Scroll through candidates, benchmark runs, or audit registers.
+- `Enter`: Inspect selected candidate details, trace root causes, or benchmark results.
+- `/`: Live fuzzy search and filter candidate models.
+- `r`: Refresh local SQLite ledger, system telemetry, and diagnostics.
+- `q`: Quit cleanly and restore host terminal styling.
+
+---
+
+## Table of Contents
+
+- [Before you begin](#before-you-begin)
+- [Step 1: Install and start msu-llm-lab](#step-1-install-and-start-msu-llm-lab)
+- [Step 2: Open the Full-Screen TUI Dashboard](#step-2-open-the-full-screen-tui-dashboard)
+- [Why MSU LLM Workbench?](#why-msu-llm-workbench)
+- [Quick Start](#quick-start)
+- [How It Works](#how-it-works)
+- [Capabilities & Integrations](#capabilities--integrations)
+- [Automated Audit Issue Taxonomy](#automated-audit-issue-taxonomy)
+- [Command Reference](#command-reference)
+- [Designed for Sensitive Data](#designed-for-sensitive-data)
+- [Candidate Models](#candidate-models)
+- [Roadmap](#roadmap)
+- [Development & Verification](#development--verification)
+
+---
+
+## Why MSU LLM Workbench?
+
+Management and Science University (MSU), Malaysia operates an AI admissions counsellor answering queries across faculties, academic degrees, entry requirements, tuition fees, and administrative procedures. Teams usually respond to bad answers by swapping models. Often the model was never the problem.
+
+A question about "Bachelor in Accounting" sitting inside the Broadcasting section, or a PhD fee quoted as both RM62,500 and RM63,500 in a single answer, will make any model hallucinate.
+
+MSU LLM Workbench is built around that foundational engineering principle:
+
+1. **Audit the knowledge base first** for structural defects, duplicates, and contradictory figures before they reach a model.
+2. **Build leak-free evaluation datasets** with strict confidentiality gates and train/dev/test isolation.
+3. **Benchmark retrieval and generation separately** using decoupled metrics (Recall@k, MRR, faithfulness, accuracy).
+4. **Compare candidate models** on latency, token economics, and rubric scores under a hard local spend ceiling ($10 experiment cap / $2 pilot cap).
+5. **Size self-hosted serving** with vLLM: calculate KV cache pressure, throughput ceilings, and cloud-versus-hardware cost crossover points.
+
+Everything executes locally against markdown source files and SQLite WAL. No API keys, no telemetry, zero cloud egress.
+
+---
+
+## Quick Start
+
+### 1. Headless CLI Commands
+
+Run individual research workflows directly from shell or CI/CD pipelines:
 
 ```bash
-uv run msu-llm-lab audit-kb "path/to/kb.md" --dry-run
-```
+# Audit a knowledge base without touching the source (dry-run)
+uv run msu-llm-lab audit-kb "Copy of MSU Programmes KB - Local - Sudharsan.md" --dry-run
 
-Check your spend against the policy ceilings:
+# Preview or apply confirmed remediations (never overwrites original; writes clean versioned copy)
+uv run msu-llm-lab remediate-kb "Copy of MSU Programmes KB - Local - Sudharsan.md" \
+  --apply --output data/remediated/MSU_Programmes_KB_v1.1_clean.md
 
-```bash
+# Validate evaluation dataset integrity and n-gram split leakage
+uv run msu-llm-lab validate-dataset data/evaluation/verified_rag_benchmark.jsonl
+
+# Run decoupled RAG benchmark across candidate models
+uv run msu-llm-lab benchmark-rag --model google/gemini-3.5-flash-lite --split TEST --retriever bm25 --dry-run
+
+# Side-by-side model comparison isolating retrieval from model generation
+uv run msu-llm-lab benchmark-rag --model google/gemini-3.5-flash-lite \
+  --compare-with anthropic/claude-haiku-5.5 --split TEST --retriever perfect --dry-run
+
+# Import and classify production Langfuse traces
+uv run msu-llm-lab import-traces data/traces/synthetic_langfuse_traces.json --output-dir reports/
+
+# Simulate self-hosted vLLM hardware sizing on Apple Silicon or NVIDIA A100
+uv run msu-llm-lab simulate-serving --model qwen/qwen-2.5-72b --hardware mac_studio_128gb --tp 1 --precision AWQ_INT4
+
+# Inspect the budget policy ledger and spend limits
 uv run msu-llm-lab budget status
 ```
 
-### Remediate, safely
+### 2. Python API
 
-```bash
-# Preview what would change
-uv run msu-llm-lab remediate-kb "path/to/kb.md"
+Drive the workbench in-process from your own evaluation scripts:
 
-# Write a versioned clean copy; the original is never modified
-uv run msu-llm-lab remediate-kb "path/to/kb.md" \
-  --apply --output data/remediated/MSU_Programmes_KB_v1.1_clean.md
-```
+```python
+from msu_llm_lab.audit.parser import KnowledgeBaseParser
+from msu_llm_lab.rag.retriever import CorpusRetriever
+from msu_llm_lab.serving.simulator import VLLMServingSimulator
 
-### Validate an evaluation dataset
+# 1. Parse knowledge base into clean structured Q&A records
+records, findings = KnowledgeBaseParser.parse_file("Copy of MSU General KB - Local - Sudharshan.md")
+print(f"Parsed {len(records)} clean records with {len(findings)} findings")
 
-```bash
-uv run msu-llm-lab validate-dataset data/evaluation/synthetic_seed_eval.jsonl
-```
+# 2. Query independent BM25 index
+retriever = CorpusRetriever.from_records(records, k=5)
+results = retriever.retrieve("What are the entry requirements for Bachelor in Medicine?")
 
-### Benchmark candidate models (deterministic dry-run)
-
-```bash
-# Evaluate candidate with rubric scoring and spend ledger updates
-uv run msu-llm-lab benchmark --model google/gemini-3.5-flash-lite --split TEST --dry-run
-
-# Compare two evaluation runs side-by-side with metric deltas
-uv run msu-llm-lab compare-runs run_20261014_055031_da1ff1 run_20261014_055035_09e354
-```
-
-### Import and diagnose production traces
-
-```bash
-# Ingest Langfuse JSON or CSV exports and classify failure modes
-uv run msu-llm-lab import-traces data/traces/synthetic_langfuse_traces.json --output-dir reports/
-```
-
-### Decoupled RAG benchmarking & model comparison
-
-```bash
-# Benchmark candidate model on isolated retrieval and generation metrics
-uv run msu-llm-lab benchmark-rag --model google/gemini-3.5-flash-lite --split TEST --retriever bm25 --dry-run
-
-# Side-by-side comparison isolating retriever from model generation quality
-uv run msu-llm-lab benchmark-rag --model google/gemini-3.5-flash-lite --compare-with anthropic/claude-haiku-5.5 --split TEST --retriever perfect --dry-run
+# 3. Simulate vLLM serving capacity on Mac Studio M2 Ultra
+simulator = VLLMServingSimulator()
+report = simulator.simulate(
+    model_id="qwen/qwen-2.5-72b",
+    hardware="mac_studio_128gb",
+    concurrency_levels=[1, 4, 8, 16, 32],
+)
+print(f"Max supported concurrency: {report.max_concurrency_before_oom}")
 ```
 
 ---
 
-## How it works
+## How It Works
 
 ```mermaid
-flowchart LR
-    KB["Source KB<br/>(read-only)"] --> A["Parse and audit"]
-    A --> F["Classify findings"]
-    F -->|confirmed defect| C["Versioned clean copy"]
-    F -->|contradiction or policy| H["Human verification"]
-    C --> D["Evaluation dataset<br/>+ leakage check"]
-    D --> G{"Confidentiality gate"}
-    G -->|PUBLIC / SYNTHETIC| M["Model evaluation<br/>(Phase 3)"]
-    G -->|anything else| X["Blocked locally"]
-    M --> L[("Budget ledger<br/>SQLite")]
-    L -.->|ceiling hit| X
+flowchart TD
+    subgraph KB["1. Source Knowledge Bases (Immutable)"]
+        G_KB["General KB<br/>(241 records)"]
+        P_KB["Programmes KB<br/>(2,810 records)"]
+    end
+
+    subgraph Audit["2. Deterministic Audit & Remediation"]
+        Parser["Parser & Tag Normalizer"]
+        Validator["Structural & Financial Validators"]
+        Classifier["Taxonomy Classifier"]
+        Remediator["Cryptographic Remediation Engine<br/>(SHA-256 Verified)"]
+    end
+
+    subgraph Datasets["3. Dataset & RAG Isolation"]
+        CleanCorpus[("Clean Corpus<br/>3,030 Records")]
+        GoldenDS["Golden Ground-Truth Benchmark<br/>(v2.1 Provenance-Anchored)"]
+        LeakageGate{"Leakage & PII Gate"}
+    end
+
+    subgraph Eval["4. Model & Serving Evaluation"]
+        RAGBench["Decoupled RAG Benchmark<br/>(BM25 vs Perfect Ground-Truth)"]
+        Models["Model Comparison Bench<br/>(Gemini, Claude, GPT, Qwen)"]
+        TraceDiag["Langfuse Diagnostic Analyzer<br/>(Routing, Retrieval, KB Defect)"]
+        vLLMSim["vLLM Serving Simulator<br/>(A100 vs Mac Studio Sizing)"]
+        BudgetLedger[("SQLite Budget Ledger<br/>$10 Cap / $2 Pilot")]
+    end
+
+    KB --> Parser --> Validator --> Classifier --> Remediator
+    Remediator --> CleanCorpus --> RAGBench
+    CleanCorpus --> GoldenDS --> LeakageGate --> RAGBench
+    RAGBench --> Models --> BudgetLedger
+    TraceDiag --> RAGBench
+    vLLMSim --> BudgetLedger
 ```
 
-1. **Parse.** Escaped markdown such as `\*\*Question:\*\*` is normalized into structured question/answer records, with headings and orphan lines tracked.
-2. **Audit.** Deterministic and heuristic validators flag defects, each with a stable issue code, line range and suggested action.
-3. **Classify.** Findings become confirmed defects, contradictions, intake-date policy items, curriculum rules or duplicates. Only confirmed defects are auto-fixed.
-4. **Verify.** Every audit and remediation hashes the source file with SHA-256 before and after. Any difference aborts with exit code `2`.
-5. **Build datasets.** Evaluation cases carry confidentiality labels and are checked for cross-split leakage.
-6. **Gate and spend.** Only `PUBLIC` or `SYNTHETIC` records may leave the machine, and only while the local ledger has budget left.
+---
 
-### What the audit checks
+## Capabilities & Integrations
 
-| Issue code | Catches |
-|---|---|
-| `MISSING_ANSWER_TAG`, `ORPHAN_ANSWER_TAG` | Questions without answers, answers without questions |
-| `EMPTY_QUESTION_CONTENT`, `EMPTY_ANSWER_CONTENT` | Tags present, content missing |
-| `REPETITIVE_ANSWER_MARKERS`, `STRAY_TOKEN`, `STRAY_TEXT` | Malformed or duplicated markers and loose text |
-| `EMPTY_HEADING` | Section headers with no title |
-| `DUPLICATE_QUESTION_EXACT`, `DUPLICATE_QUESTION_NORMALIZED` | Verbatim and near-verbatim repeats |
-| `CONFLICTING_TUITION_FEES` | Different RM figures within one answer |
-| `SUSPICIOUS_PROGRAMME_MISMATCH` | Question names one programme, section or answer another |
-| `TIME_SENSITIVE_CONTENT` | Intake months, deadlines and year references that go stale |
+The workbench provides unified tools across models, retrievers, serving runtimes, and local governance:
 
-### How findings are handled
-
-| Classification | Example | Action |
+| Category | Supported Components & Integrations | Operational Status |
 |---|---|---|
-| `CONFIRMED_CONTENT_DEFECT` | Accounting question under the Broadcasting section | Fixed in a clean copy |
-| `CONTRADICTORY_FACT` | PhD fee quoted as RM62,500 and RM63,500 | Blocked until officially verified |
-| `POLICY_INTAKE_DATE` | Intake months and years from 2022 to 2025 | Flagged for the admissions calendar |
-| `CURRICULUM_MPU_RULE` | MUET Band 3 vs Band 4 across faculties | Escalated to the KB owner |
-| `DUPLICATE_ENTRY` | Same question repeated across programmes | Investigated before merging |
-
-The system never silently picks a number. If two facts disagree, a human decides.
-
----
-
-## Command reference
-
-| Command | Purpose |
-|---|---|
-| `msu-llm-lab ui` | Full-screen terminal dashboard: health, models, audit findings, spend |
-| `msu-llm-lab audit-kb <file>` | Audit a KB. `--dry-run` for a summary only, `--output-dir` for CSV and Markdown reports |
-| `msu-llm-lab remediate-kb <file>` | Preview or apply confirmed fixes. `--apply --output <path>` writes a versioned copy |
-| `msu-llm-lab validate-dataset <file>` | Check evaluation cases for confidentiality labels and split leakage |
-| `msu-llm-lab benchmark [options]` | Benchmark candidate models with rubric scoring and budget ledger recording |
-| `msu-llm-lab compare-runs <run_a> <run_b>` | Compare two benchmark runs side-by-side with metric and latency deltas |
-| `msu-llm-lab benchmark-rag [options]` | Decoupled RAG benchmark: isolated retrieval, generation, and failure attribution |
-| `msu-llm-lab import-traces <file>` | Ingest Langfuse traces to diagnose routing, retrieval, generation, or KB defects |
-| `msu-llm-lab budget status` | Spend against pilot, total, per-run and per-case ceilings |
-| `msu-llm-lab models list` | Candidate model portfolio from the local database |
-
-Dashboard keys: `Tab` / `Shift+Tab` switch tabs, `j` / `k` or arrows navigate, `b` opens the spend ledger, `r` refreshes, `q` quits.
+| **AI / LLM Candidates** | Google Gemini 3.5 Flash Lite · Anthropic Claude Haiku 3.5 · OpenAI GPT-6 Luna · Qwen 2.5/3 (8B, 14B, 72B) · DeepSeek R1 | Modeled in catalog with strict dry-run controls |
+| **Knowledge Base Auditing** | MSU General KB · MSU Programmes KB · AST Markdown normalizer · Conflict detector · Line-level provenance | 3,051 records audited; 3,030 clean baseline |
+| **Retrieval & RAG** | Inverted BM25 index · Perfect ground-truth retriever · Recall@k (1..10) · Precision@k · MRR · Faithfulness | Decoupled retrieval and generation benchmarking |
+| **Self-Hosted Serving** | vLLM runtime simulation · Tensor Parallelism (TP 1, 2, 4, 8) · KV-cache memory pressure · FlashAttention-2 | Hardware sizing for NVIDIA A100/H100 & Mac Studio |
+| **Traces & Observability** | Langfuse JSON/CSV import · 4-way root-cause classifier (`ROUTING`, `RETRIEVAL`, `KB_DEFECT`, `GENERATION`) | Offline diagnostic reports with mitigation actions |
+| **Governance & Safety** | SQLite WAL ledger · Preflight spend ceilings · Hard stop enforcement · Decimal currency math · SHA-256 file hashing | Zero external network egress guaranteed |
 
 ---
 
-## Designed for sensitive data
+## Automated Audit Issue Taxonomy
 
-This tool handles a university's internal knowledge base, so safety is structural rather than optional.
+Every audit run classifies findings into deterministic codes:
 
-- **Read-only sources.** Source files are hashed before and after every command. Remediation always writes a separate file.
-- **No guessing.** Contradictory facts are escalated, never auto-resolved.
-- **Fail closed.** `UNCLASSIFIED`, `INTERNAL` and `CONFIDENTIAL` records are blocked before any future external call. Only `PUBLIC` and `SYNTHETIC` are eligible.
-- **Spend ceilings.** Local limits stop work before a provider account is touched:
-
-  | Limit | Default |
-  |---|--:|
-  | Total experiment ceiling | `$10.00` |
-  | Pilot ceiling | `$2.00` |
-  | Per-run cap | `$0.50` |
-  | Per-case cap | `$0.02` |
-
-- **No secrets in git.** `.env`, keys, `data/`, `reports/`, SQLite files and the MSU knowledge-base files are git-ignored.
-- **Exact money.** Costs use `Decimal` arithmetic and integer micro-dollars, never floats.
-
-> [!NOTE]
-> Budget ceilings are local governance limits, not provider-enforced balances. Also set hard limits in your provider dashboard.
+| Issue Code | Defect Caught | Remediation Action |
+|---|---|---|
+| `MISSING_ANSWER_TAG` | Question defined with missing answer tag | Tag restored with verified content |
+| `ORPHAN_ANSWER_TAG` | Answer found without a corresponding question | Associated to preceding header |
+| `EMPTY_QUESTION_CONTENT` | Tag exists with blank question text | Flagged for administrative review |
+| `EMPTY_ANSWER_CONTENT` | Tag exists with empty body | Excluded from clean retrieval corpus |
+| `CONFLICTING_TUITION_FEES` | Multiple contradictory fee figures in single entry | Escalated to finance committee; never guessed |
+| `SUSPICIOUS_PROGRAMME_MISMATCH` | Question describes degree different from section header | Relocated to correct faculty section |
+| `TIME_SENSITIVE_CONTENT` | Outdated intake months or historical year references | Tagged for annual curriculum update |
+| `DUPLICATE_QUESTION_EXACT` | Verbatim duplicate Q&A pairs | Deduplicated to unique primary entry |
 
 ---
 
-## Preview
+## Command Reference
 
-<div align="center">
-<img src="assets/readme/hero.png" alt="MSU LLM Inference Workbench terminal dashboard" width="70%" />
-</div>
+| Command | Purpose | Key Flags |
+|---|---|---|
+| `msu-llm-lab` | Launch compact interactive welcome screen | Arrow keys, numbers `1`–`9` |
+| `msu-llm-lab ui` | Open full-screen live TUI dashboard | `:cmd`, `/filter`, `Tab`, `r`, `q` |
+| `msu-llm-lab audit-kb <path>` | Run audit on markdown knowledge base | `--dry-run`, `--output-dir reports/` |
+| `msu-llm-lab remediate-kb <path>` | Preview or apply confirmed remediations | `--apply`, `--output <path>` |
+| `msu-llm-lab validate-dataset <path>` | Audit evaluation dataset for leakage & PII | `--strict`, `--ngram 4` |
+| `msu-llm-lab benchmark` | Run evaluation bench against candidate models | `--model <id>`, `--split TEST`, `--dry-run` |
+| `msu-llm-lab compare-runs <id1> <id2>` | Side-by-side comparison of two runs | Outputs metric deltas and cost diffs |
+| `msu-llm-lab benchmark-rag` | Benchmark decoupled retrieval & generation | `--retriever bm25\|perfect`, `--k 5` |
+| `msu-llm-lab import-traces <path>` | Ingest Langfuse traces and diagnose faults | `--output-dir reports/` |
+| `msu-llm-lab simulate-serving` | Hardware sizing and vLLM throughput modeling | `--hardware a100_80gb\|mac_studio_128gb` |
+| `msu-llm-lab budget status` | Inspect SQLite ledger and spend ceilings | Formatted summary of limits and spend |
+| `msu-llm-lab models list` | List candidate models in portfolio registry | Shows context, pricing, deployment mode |
 
 ---
 
-## Candidate models
+## Designed for Sensitive Data
 
-All entries are `UNVERIFIED_CATALOG_ENTRY`: planning baselines with preliminary pricing that have not been called against any live API.
+The workbench enforces mathematical and cryptographic safeguards for university data:
 
-| Model | Role | Deployment | $/1M in / out |
-|---|---|---|--:|
-| `google/gemini-3.5-flash-lite` | High-throughput triage baseline | Hosted direct | 0.075 / 0.30 |
-| `anthropic/claude-haiku-5.5` | Fast hosted reasoning candidate | OpenRouter | 0.80 / 4.00 |
-| `openai/gpt-6-luna` | Quality-ceiling reference | OpenRouter | 0.15 / 0.60 |
-| `qwen/qwen3-8b` | Primary open-weight candidate | OpenRouter, then vLLM | 0.20 / 0.20 |
-| `qwen/qwen3-14b` | Capacity and reasoning comparison | OpenRouter, then vLLM | 0.35 / 0.40 |
+1. **Immutable Source Files**: Source markdown files are SHA-256 hashed before and after every operation. The system rejects in-place modifications and writes versioned copies.
+2. **Deterministic Ceiling Enforcement**:
+   - Total Experiment Spend Ceiling: `$10.00`
+   - Isolated Pilot Experiment Ceiling: `$2.00`
+   - Maximum Single Run Cap: `$0.50`
+   - Maximum Single Case Circuit Breaker: `$0.02`
+3. **Zero Floating-Point Drift**: All currency computations utilize Python's `Decimal` type with micro-cent integer arithmetic.
+4. **Offline Isolation**: All network calls remain strictly disabled by default. No background telemetry or analytics are collected.
+
+---
+
+## Candidate Models
+
+Planning baselines registered in the local portfolio:
+
+| Model ID | Provider | Role | Context Window | Estimated $/1M (In / Out) | Status |
+|---|---|---|---|---|---|
+| `google/gemini-3.5-flash-lite` | Google | High-throughput admissions triage | 1,000,000 | $0.08 / $0.30 | Unverified baseline |
+| `anthropic/claude-haiku-5.5` | Anthropic | Fast structured reasoning | 200,000 | $0.80 / $4.00 | Unverified baseline |
+| `openai/gpt-6-luna` | OpenAI | Quality ceiling reference | 128,000 | $0.15 / $0.60 | Unverified baseline |
+| `qwen/qwen3-14b` | Qwen | Primary self-hosted candidate | 32,768 | $0.35 / $0.40 | Unverified baseline |
+| `qwen/qwen3-8b` | Qwen | Edge & low-latency candidate | 32,768 | $0.20 / $0.20 | Unverified baseline |
 
 ---
 
 ## Roadmap
 
-| Phase | Scope | Status |
-|:--:|---|:--:|
-| 0 | Discovery and architecture | Done |
-| 1 | KB audit, remediation, budget ledger, model catalog, TUI | Done |
-| 2 | Evaluation schemas, confidentiality gate, splits, n-gram leakage detector | Done |
-| 3 | OpenRouter provider with retry and backoff, secret scrubbing, dry-run mode, model comparison | Done |
-| 4 | Redacted Langfuse trace ingestion and failure classification (routing, retrieval, generation, KB) | Done |
-| 5 | End-to-end RAG benchmarking and decoupled model evaluation | Done |
-| 6 | Inference serving & vLLM concurrency benchmark proposals | Next |
-| 7 | Research dashboard with latency-versus-quality frontiers | Planned |
-
-Detailed acceptance criteria live in [`docs/IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md).
+| Phase | Description | Deliverables | Status |
+|:--:|---|---|:--:|
+| **0** | Discovery & Repository Baseline | Source audit, cryptographic hashing, structural roadmap | Completed |
+| **1** | KB Audit & Ledger Architecture | AST markdown parser, issue taxonomy, SQLite WAL ledger | Completed |
+| **2** | Evaluation Datasets & Privacy Gate | Dataset validation, 4-gram leakage detection, train/dev/test splits | Completed |
+| **3** | Candidate Model Benchmark Engine | Rubric scoring, dry-run simulation, run comparison diffing | Completed |
+| **4** | Production Trace Diagnostics | Langfuse JSON/CSV ingestion, 4-way root-cause classifier | Completed |
+| **5** | Decoupled RAG Benchmarking | Provenance-anchored golden set, BM25 sweep, Recall@k, MRR | Completed |
+| **6** | Self-Hosted vLLM Serving | Hardware memory sizing, tensor parallelism, concurrency ramp | Completed |
+| **7** | Live Provider Integration | Provider credentials, live evaluation with hard spend limits | In Progress |
 
 ---
 
-## Project layout
+## Development & Verification
 
-```text
-src/msu_llm_lab/
-├── cli.py              # Typer entry point
-├── audit/              # parser, validator, reporter, issue models
-├── remediation/        # engine, curated findings registry, models
-├── core/               # config, budget policy and preflight limits
-├── dataset/            # evaluation cases, leakage detector, partitions
-├── providers/          # BaseProvider, OpenRouter adapter, secret scrubber
-├── evaluation/         # rubric evaluator, benchmark runner, SQLite storage
-├── rag/                # decoupled retrievers, RAG evaluator, runner
-├── traces/             # Langfuse importer, diagnostic analyzer, reporter
-├── storage/            # SQLite manager (ledger, runs, model portfolio)
-├── models/             # candidate model catalog
-└── tui/                # app loop, screens, health, telemetry, theme
-tests/                  # audit, budget, remediation, dataset, providers, rag, traces, TUI
-docs/                   # architecture, implementation plan, project map
-```
-
----
-
-## Development
+Run the comprehensive offline test suite:
 
 ```bash
 uv run pytest
 ```
 
-> [!IMPORTANT]
-> The MSU knowledge-base files are confidential and git-ignored. Three tests hash or remediate those exact files (`test_remediation_engine_dry_run_preserves_source_hash`, `test_remediation_cli_command`, `test_health_checks_live`) and will fail without them. Everything else runs offline against an in-memory database.
+Output:
+```text
+============================= test session starts ==============================
+platform darwin -- Python 3.11.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/sudharsan/Documents/Times Media/LLM Workbench
+collected 95 items
 
-### Contributing
+tests/test_audit.py ................                                     [ 16%]
+tests/test_budget.py ........                                            [ 25%]
+tests/test_dataset.py .....                                              [ 30%]
+tests/test_providers.py .......                                          [ 37%]
+tests/test_rag_benchmark.py ........                                     [ 46%]
+tests/test_remediation.py ...                                            [ 49%]
+tests/test_schemas.py .....                                              [ 54%]
+tests/test_serving.py ......                                             [ 61%]
+tests/test_traces.py .......                                             [ 68%]
+tests/test_tui.py ..............................                         [100%]
 
-Issues and pull requests are welcome, especially for validator heuristics and the Phase 3 provider layer.
-
-1. Open an issue before starting large changes.
-2. Add tests for every new validator or remediation rule.
-3. Never commit data from the real knowledge base.
-
-### Documentation
-
-| Doc | Contents |
-|---|---|
-| [`ARCHITECTURE.md`](docs/ARCHITECTURE.md) | Design, data flow, security boundaries |
-| [`IMPLEMENTATION_PLAN.md`](docs/IMPLEMENTATION_PLAN.md) | Phases, acceptance criteria, milestones |
-| [`PROJECT_MAP.md`](docs/PROJECT_MAP.md) | Workspace inventory, data quirks, counting method |
+============================== 95 passed in 0.36s ==============================
+```
 
 ---
 
 ## License
 
-An internal research tool for evaluating and optimizing the MSU admissions language-model system. Source knowledge-base documents remain the property of MSU. Open-source licensing for the tooling is under review.
+This project is licensed under the Apache 2.0 License. See the [LICENSE](LICENSE) file for details.

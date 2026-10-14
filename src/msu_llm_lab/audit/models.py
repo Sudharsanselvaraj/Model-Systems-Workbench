@@ -49,6 +49,27 @@ class KBRecord:
     is_multiline: bool
     is_inline: bool
     answer_marker_count: int = 1
+    source_file_hash: str = ""
+    parsing_status: str = "VALID"
+    validation_warnings: List[str] = field(default_factory=list)
+
+
+class FindingStatus(str, Enum):
+    """Review and confidence status for audit findings."""
+    CONFIRMED = "CONFIRMED"
+    CANDIDATE = "CANDIDATE"
+    OFFICIAL_VERIFICATION_REQUIRED = "OFFICIAL_VERIFICATION_REQUIRED"
+    FALSE_POSITIVE = "FALSE_POSITIVE"
+
+
+class FindingClassification(str, Enum):
+    """Classification taxonomy matching audit governance requirements."""
+    CONFIRMED_STRUCTURAL_DEFECT = "CONFIRMED_STRUCTURAL_DEFECT"
+    CONFIRMED_EXACT_DUPLICATE = "CONFIRMED_EXACT_DUPLICATE"
+    POTENTIAL_SEMANTIC_DEFECT = "POTENTIAL_SEMANTIC_DEFECT"
+    POTENTIAL_CONTRADICTION = "POTENTIAL_CONTRADICTION"
+    POTENTIALLY_OUTDATED_INFO = "POTENTIALLY_OUTDATED_INFO"
+    HUMAN_VERIFICATION_REQUIRED = "HUMAN_VERIFICATION_REQUIRED"
 
 
 @dataclass
@@ -67,6 +88,11 @@ class AuditIssue:
     raw_snippet: str
     suggested_action: str
     requires_human_verification: bool = True
+    status: FindingStatus = FindingStatus.CANDIDATE
+    record_id: Optional[str] = None
+    classification: FindingClassification = FindingClassification.POTENTIAL_SEMANTIC_DEFECT
+    confidence_level: str = "HIGH"
+    requires_human_approval: bool = True
 
 
 @dataclass
