@@ -20,6 +20,7 @@ from msu_llm_lab.tui.screens import (
     build_inference_status_panel,
     build_model_catalogue_panel,
     build_budget_main_panel,
+    build_dataset_validation_panel,
     build_roadmap_panel,
     build_health_main_panel,
     build_settings_main_panel,
@@ -174,17 +175,8 @@ class WorkbenchTUI:
                     title="BUDGET & USAGE",
                 )
         elif self.nav_index == 2:
-            content_panel = build_roadmap_panel(
-                "DATASET VALIDATION",
-                "PLANNED (Step 2)",
-                [
-                    "MSU General KB & Programmes KB schema validation",
-                    "Dify prompt template extraction & variable checks",
-                    "Ground truth query-response pairing & golden datasets",
-                    "Student privacy redaction & sanitization filters",
-                ],
-                self.focused_pane == "MAIN",
-            )
+            content_panel = build_dataset_validation_panel(self.focused_pane == "MAIN")
+
         elif self.nav_index == 3:
             content_panel = build_roadmap_panel(
                 "EVALUATION RUNS",
