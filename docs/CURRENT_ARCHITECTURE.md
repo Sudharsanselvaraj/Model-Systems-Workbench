@@ -5,7 +5,7 @@ graph TB
     %% CLI & Interface Layer
     subgraph Interfaces["1. User Interfaces & CLI Layer"]
         CLI["Typer CLI (cli.py)"]
-        TUI["Textual Terminal Dashboard (tui/)"]
+        TUI["Rich Terminal Dashboard (tui/)"]
         
         CLI --> CMD_Audit["audit-kb"]
         CLI --> CMD_Remediate["remediate-kb"]
