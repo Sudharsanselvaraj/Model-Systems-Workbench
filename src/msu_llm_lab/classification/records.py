@@ -55,6 +55,8 @@ class AdapterResult(BaseModel):
     retry_errors: List[str] = Field(default_factory=list)
     native_cost: Optional[Decimal] = None                # provider usage.cost as received (credits); not booked as USD until the unit is verified
     native_cost_unit: Optional[str] = None
+    finish_reason: Optional[str] = None                  # as reported by the provider; None for records made before this field was captured
+    reasoning_tokens: Optional[int] = None
     actual_cost_usd: Optional[Decimal] = None
     estimated_cost_usd: Optional[Decimal] = None
     cost_usd: Decimal = Decimal("0")
@@ -98,6 +100,8 @@ class PredictionRecord(BaseModel):
     retry_errors: List[str] = Field(default_factory=list)
     native_cost: Optional[Decimal] = None
     native_cost_unit: Optional[str] = None
+    finish_reason: Optional[str] = None
+    reasoning_tokens: Optional[int] = None
     actual_cost_usd: Optional[Decimal] = None
     estimated_cost_usd: Optional[Decimal] = None
     recorded_cost_usd: Optional[Decimal] = None
@@ -127,7 +131,7 @@ def record_from_result(
         native_confidence=result.native_confidence, confidence_source=result.confidence_source, yes_prob=result.yes_prob,
         prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens, usage_source=result.usage_source,
         latency_ms=result.latency_ms, attempt_latency_ms=result.attempt_latency_ms, model_latency_ms=result.model_latency_ms,
-        attempts=result.attempts, retry_errors=list(result.retry_errors), native_cost=result.native_cost, native_cost_unit=result.native_cost_unit,
+        attempts=result.attempts, retry_errors=list(result.retry_errors), native_cost=result.native_cost, native_cost_unit=result.native_cost_unit, finish_reason=result.finish_reason, reasoning_tokens=result.reasoning_tokens,
         actual_cost_usd=result.actual_cost_usd,
         estimated_cost_usd=result.estimated_cost_usd,
         recorded_cost_usd=result.cost_usd if result.cost_basis != "UNAVAILABLE" else None, cost_basis=result.cost_basis,
