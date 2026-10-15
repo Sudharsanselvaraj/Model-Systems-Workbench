@@ -21,7 +21,7 @@ The workspace contains two raw knowledge-base source files:
 
 ### 1.2 Git & Version Control State
 - **Status**: Git repository initialized with strict `.gitignore` excluding secrets, `.venv`, cache, and proprietary knowledge base files.
-- **Test Suite Status**: **502 passed tests** (`uv run pytest`) across audit, budget, dataset, providers, rag, classification, registry, traces, and TUI.
+- **Test Suite Status**: **575 passed tests** (`uv run pytest`) across audit, budget, dataset, providers, rag, classification, registry, traces, and TUI.
 
 ### 1.3 Python & Tooling Environment
 - **System Python**: `3.11.7` (`/Library/Frameworks/Python.framework/Versions/3.11/bin/python3`) — fulfills the Python 3.11 requirement.
@@ -30,7 +30,7 @@ The workspace contains two raw knowledge-base source files:
   - Standard `pip3` is installed at `/Library/Frameworks/Python.framework/Versions/3.11/bin/pip3`.
   - `poetry` is not installed.
 - **Virtual Environment**: Isolated project virtualenv (`.venv`) active.
-- **Test Framework**: `pytest` (502 passing tests in 0.39s).
+- **Test Framework**: `pytest` (575 passing tests).
 
 ### 1.4 Configuration & Secrets State
 - No `.env` or credential files exist in the repository.
@@ -112,13 +112,16 @@ LLM Workbench/
 │       ├── traces/                     # Phase 4: Langfuse trace importer & analysis
 │       │   ├── importer.py             # Authorized redacted JSON/CSV importer
 │       │   └── analyzer.py             # Candidate diagnosis engine (routing, retrieval, generation)
+│       ├── observability/              # Read-only telemetry: request events, aggregation, labels, prediction analysis, live monitor, trace export
 │       ├── storage/                    # Local persistence
 │       │   └── db.py                   # Lightweight SQLite storage for experiment history
 │       └── tui/                        # Interactive Rich terminal dashboard
 │           ├── app.py                  # Full-screen dashboard app
-│           ├── screens.py              # Overview, Models, Audit, Budget screens
+│           ├── screens.py              # Navigation, header, panels, budget and legacy screens
+│           ├── live_views.py           # Six experimental views, dataset review, execution header
 │           └── health.py               # System health & telemetry checks
-├── tests/                              # Automated test suite (502 passing tests)
+├── tests/                              # Automated test suite (630 passing tests)
+│   ├── test_env_config.py              # Secure .env loading, shell precedence, permission and leak checks
 │   ├── test_audit.py                   # KB parser, validator, and edge cases
 │   ├── test_budget.py                  # Budget ledger and ceiling enforcement
 │   ├── test_dataset.py                 # Dataset manager and leakage checks
