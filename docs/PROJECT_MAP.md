@@ -21,7 +21,7 @@ The workspace contains two raw knowledge-base source files:
 
 ### 1.2 Git & Version Control State
 - **Status**: Git repository initialized with strict `.gitignore` excluding secrets, `.venv`, cache, and proprietary knowledge base files.
-- **Test Suite Status**: **95 passed tests** (`uv run pytest`) across audit, budget, dataset, providers, rag, serving, traces, and TUI.
+- **Test Suite Status**: **502 passed tests** (`uv run pytest`) across audit, budget, dataset, providers, rag, classification, registry, traces, and TUI.
 
 ### 1.3 Python & Tooling Environment
 - **System Python**: `3.11.7` (`/Library/Frameworks/Python.framework/Versions/3.11/bin/python3`) — fulfills the Python 3.11 requirement.
@@ -30,7 +30,7 @@ The workspace contains two raw knowledge-base source files:
   - Standard `pip3` is installed at `/Library/Frameworks/Python.framework/Versions/3.11/bin/pip3`.
   - `poetry` is not installed.
 - **Virtual Environment**: Isolated project virtualenv (`.venv`) active.
-- **Test Framework**: `pytest` (95 passing tests in 0.39s).
+- **Test Framework**: `pytest` (502 passing tests in 0.39s).
 
 ### 1.4 Configuration & Secrets State
 - No `.env` or credential files exist in the repository.
@@ -105,13 +105,10 @@ LLM Workbench/
 │       │   ├── runner.py               # Benchmark execution coordinator
 │       │   └── metrics.py              # Factual accuracy, groundedness, rubric scorers
 │       ├── rag/                        # Phase 5: Decoupled RAG benchmarking
-│       │   ├── retriever.py            # KeywordBM25Retriever (clean KB index) & MockRetriever
+│       │   ├── retriever.py            # KeywordBM25Retriever (clean KB index)
 │       │   ├── evaluator.py            # Answer correctness & groundedness scoring
 │       │   ├── runner.py               # Decoupled RAG benchmark coordinator
 │       │   └── models.py               # RAG benchmark report schemas
-│       ├── serving/                    # Phase 6: vLLM serving simulation & hardware sizing
-│       │   ├── simulator.py            # Memory footprint, concurrency ramp, cost crossover
-│       │   └── models.py               # Hardware profiles, serving specs, crossover results
 │       ├── traces/                     # Phase 4: Langfuse trace importer & analysis
 │       │   ├── importer.py             # Authorized redacted JSON/CSV importer
 │       │   └── analyzer.py             # Candidate diagnosis engine (routing, retrieval, generation)
@@ -121,7 +118,7 @@ LLM Workbench/
 │           ├── app.py                  # Full-screen dashboard app
 │           ├── screens.py              # Overview, Models, Audit, Budget screens
 │           └── health.py               # System health & telemetry checks
-├── tests/                              # Automated test suite (95 passing tests)
+├── tests/                              # Automated test suite (502 passing tests)
 │   ├── test_audit.py                   # KB parser, validator, and edge cases
 │   ├── test_budget.py                  # Budget ledger and ceiling enforcement
 │   ├── test_dataset.py                 # Dataset manager and leakage checks
@@ -129,7 +126,6 @@ LLM Workbench/
 │   ├── test_rag_benchmark.py           # Decoupled RAG retrieval, metrics, and abstention
 │   ├── test_remediation.py             # Source hash preservation and clean copy generation
 │   ├── test_schemas.py                 # Pydantic data schemas
-│   ├── test_serving.py                 # vLLM serving simulation and cost crossover
 │   ├── test_traces.py                  # Langfuse trace import and failure classification
 │   └── test_tui.py                     # Terminal UI screens and health checks
 ├── data/                               # Local data storage (never checked into git)
@@ -137,7 +133,7 @@ LLM Workbench/
 │   ├── audit/                          # Parsed structural KB records (3,030 clean, 21 excluded)
 │   ├── remediated/                     # Versioned clean KB copies
 │   └── traces/                         # Authorized redacted trace exports
-├── reports/                            # Output directory for audit, benchmark & serving reports
+├── reports/                            # Output directory for audit, benchmark reports
 ├── Copy of MSU General KB - Local - Sudarshan.md     # Original General KB (read-only baseline)
 └── Copy of MSU Programmes KB - Local - Sudharsan.md   # Original Programmes KB (read-only baseline)
 ```
