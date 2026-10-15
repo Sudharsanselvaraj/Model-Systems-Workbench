@@ -57,7 +57,7 @@ def build_top_header() -> Table:
 
     left_text = Text()
     left_text.append("[MSU] ", style=f"bold {CYAN_HIGHLIGHT}")
-    left_text.append("LLM INFERENCE WORKBENCH ", style=f"bold {TEXT_PRIMARY}")
+    left_text.append("LLM WORKBENCH ", style=f"bold {TEXT_PRIMARY}")
     left_text.append("v0.1.0", style=f"{TEXT_MUTED}")
 
     center_text = Text()
@@ -333,7 +333,7 @@ def build_model_catalogue_panel(
     if is_focused:
         left_sub = Text(f"{count_str}   ↑/↓ move selection  |  Enter: inspect  |  Home/End  |  ←/Esc: sidebar  |  Tab: next", style=f"bold {TEXT_PRIMARY}")
     else:
-        left_sub = Text(f"{count_str}   (Press Enter or → to focus catalogue)  |  / search  |  r refresh", style=f"{TEXT_SECONDARY}")
+        left_sub = Text(f"{count_str}   (Press Enter or → to focus)  |  / search  |  r refresh  |  legacy planning list: use :roster for the verified roster", style=f"{TEXT_SECONDARY}")
 
     sub_header.add_row(
         left_sub,
@@ -1164,17 +1164,41 @@ def build_budget_usage_bottom_panel(status: BudgetStatus) -> Panel:
     )
 
 
+def _dataset_prep_summary() -> Optional[Dict[str, Any]]:
+    """Facts from the local preparation manifest (counts only), or None when no preparation has been run."""
+    import json
+    from pathlib import Path
+
+    for p in sorted(Path("data/classification_prep").glob("*/manifest.json")) if Path("data/classification_prep").exists() else []:
+        try:
+            m = json.loads(p.read_text())
+            return {"version": m["prep_version"], "rows": m["cleaning"]["rows_accounted"], "intent": m["candidates"]["intent_2h"]["cases"],
+                    "lead": f"{m['candidates']['lead_30m']['cases']}/{m['candidates']['lead_2h']['cases']}", "sessions": m["session_comparison"]["sessions"],
+                    "parity": m["parity_status"]}
+        except Exception:
+            continue
+    return None
+
+
 def build_datasets_bottom_panel() -> Panel:
-    """Builds the bottom-right DATASETS panel."""
+    """Builds the bottom-right DATASETS panel from the local preparation manifest (counts only)."""
     grid = Table.grid(expand=True, padding=(0, 1))
     grid.add_column("k", style=f"{TEXT_SECONDARY}", width=12)
     grid.add_column("v")
 
-    grid.add_row("Status:", Text("NOT IMPLEMENTED", style=f"bold {TEXT_SECONDARY}"))
-    grid.add_row("Cases:", Text("-", style=f"{TEXT_MUTED}"))
-    grid.add_row("Versions:", Text("-", style=f"{TEXT_MUTED}"))
-    grid.add_row("Privacy:", Text("-", style=f"{TEXT_MUTED}"))
-    grid.add_row("Next Step:", Text("Add evaluation datasets (Step 2)", style=f"{TEXT_PRIMARY}"))
+    info = _dataset_prep_summary()
+    if info is None:
+        grid.add_row("Status:", Text("NOT PREPARED", style=f"bold {TEXT_SECONDARY}"))
+        grid.add_row("Cases:", Text("-", style=f"{TEXT_MUTED}"))
+        grid.add_row("Versions:", Text("-", style=f"{TEXT_MUTED}"))
+        grid.add_row("Privacy:", Text("-", style=f"{TEXT_MUTED}"))
+        grid.add_row("Next Step:", Text("msu-llm-lab prepare-classification-data", style=f"{TEXT_PRIMARY}"))
+    else:
+        grid.add_row("Status:", Text("PREPARED (labels unapproved)", style=f"bold {TEXT_PRIMARY}"))
+        grid.add_row("Cases:", Text(f"{info['intent']} intent / {info['lead']} lead (30m/2h)", style=f"{TEXT_SECONDARY}"))
+        grid.add_row("Versions:", Text(f"{info['version']}  sessions 30m {info['sessions']['30m']} / 2h {info['sessions']['2h']}", style=f"{TEXT_SECONDARY}"))
+        grid.add_row("Privacy:", Text("user4 excluded; identifiers redacted; local only", style=f"{TEXT_SECONDARY}"))
+        grid.add_row("Next Step:", Text("human label review, then pick session policy", style=f"{TEXT_PRIMARY}"))
 
     return Panel(
         grid,
