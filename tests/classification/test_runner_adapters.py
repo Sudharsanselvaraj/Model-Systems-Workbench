@@ -138,16 +138,37 @@ def test_valid_choice_response_captures_everything(net, unblock):
 
 
 def test_request_uses_documented_fields_only_and_never_sends_labels(net, unblock):
-    net.script = [jev_body()]
+    net.script = [jev_body(), noul_body()]
     case = intent_case(history=[U(0, "hi"), A(1, "hello")], current=U(2, "fees?"), review_status=ReviewStatus.APPROVED,
                        expected_intent=IntentLabel.GREETING)
-    jev_adapter().classify(Task.INTENT, runner_mod._state_text(Task.INTENT, case), INTENT_PROMPT, live_authorized=True)
+    adapter = jev_adapter()
+    # 1. Intent task: Choice question
+    adapter.classify(Task.INTENT, runner_mod._state_text(Task.INTENT, case), INTENT_PROMPT, live_authorized=True)
     req, body = net.requests[0], net.bodies[0]
-    assert req.full_url == JEV_ENDPOINT and req.get_header("Authorization") == f"Bearer {FAKE_KEY}"
-    assert set(body) == {"model", "state", "questions"} and body["model"] == JEV_MODEL_ID
+    assert req.get_method() == "POST"
+    assert req.full_url == "https://openrouter.ai/api/alpha/decisions"
+    assert req.full_url == JEV_ENDPOINT
+    assert req.get_header("Authorization") == f"Bearer {FAKE_KEY}"
+    assert req.get_header("Content-type") == "application/json"
+    assert set(body.keys()) == {"model", "state", "questions"} and body["model"] == "typesafe/jev-1.14"
+    assert isinstance(body["state"], list) and isinstance(body["state"][0], str)
     q = body["questions"]["intent"]
     assert q["type"] == "choice" and list(q["criteria"]) == LABELS and "Synthetic first step" in q["instructions"]
     assert "expected" not in json.dumps(body).lower()
+
+    # 2. Lead Qualifier task: Noul question
+    l_case = lead_case()
+    adapter.classify(Task.LEAD, runner_mod._state_text(Task.LEAD, l_case), LEAD_PROMPT, live_authorized=True)
+    req2, body2 = net.requests[1], net.bodies[1]
+    assert req2.get_method() == "POST"
+    assert req2.full_url == "https://openrouter.ai/api/alpha/decisions"
+    assert req2.get_header("Authorization") == f"Bearer {FAKE_KEY}"
+    assert req2.get_header("Content-type") == "application/json"
+    assert set(body2.keys()) == {"model", "state", "questions"} and body2["model"] == "typesafe/jev-1.14"
+    assert isinstance(body2["state"], list) and isinstance(body2["state"][0], str)
+    q2 = body2["questions"]["lead"]
+    assert q2["type"] == "noul" and "instructions" in q2
+    assert "expected" not in json.dumps(body2).lower()
 
 
 @pytest.mark.parametrize("answer,issue", [
@@ -264,9 +285,11 @@ def test_malformed_noul_answers_are_rejected(net, unblock, answer, issue):
 def test_jev_unauthorized_unblocked_and_keyless_requests_never_reach_network(net, monkeypatch):
     with pytest.raises(LiveNotAuthorizedError):
         jev_adapter().classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=False)
-    with pytest.raises(ProviderError, match="registry blockers"):  # strict pilot stage blocks Jev's unconfirmed schema
-        jev_adapter().classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=True)
-    monkeypatch.setattr(registry, "synthetic_live_blockers", lambda m, stage='pilot': [])
+    assert registry.synthetic_live_blockers(JEV_MODEL_ID, "pilot") == []   # schema facts are LIVE_OBSERVED
+    with monkeypatch.context() as m:
+        block_route(m, "jev-1.14")
+        with pytest.raises(ProviderError, match="registry blockers"):       # a real blocker still stops the request before the network
+            jev_adapter().classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=True)
     monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
     with pytest.raises(ProviderError, match="OPENROUTER_API_KEY"):
         JevDecisionsAdapter(api_key=None).classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=True)
@@ -291,7 +314,7 @@ def test_chat_intent_valid_label_pinned_route_and_no_schema_mode(net, unblock):
     r = chat_adapter().classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=True)
     assert r.ok and r.predicted_label == IntentLabel.GREETING and r.confidence_source == "NONE" and r.label_probs is None
     body = net.bodies[0]
-    assert body["provider"] == {"order": ["openai"], "allow_fallbacks": False}
+    assert body["provider"] == {"order": ["azure"], "allow_fallbacks": False}
     assert "response_format" not in body and body["temperature"] == 0.0 and body["max_tokens"] == 16
     assert body["messages"][0] == {"role": "system", "content": INTENT_PROMPT}
     assert (r.resolved_model_id, r.serving_provider) == ("openai/gpt-4.1-nano-2025-04-14", "OpenAI")
@@ -412,6 +435,7 @@ def test_wrong_case_type_and_duplicate_ids_rejected(env, net, unblock):
 
 def test_unknown_unverified_and_blocked_models_stop_before_network(env, net, monkeypatch):
     block_route(monkeypatch, "gpt-4.1-nano")
+    block_route(monkeypatch, "jev-1.14")
     r = make_runner(env)
     with pytest.raises(ModelNotReadyError, match="No adapter"):
         r.run(task=Task.INTENT, cases=cases(), model_id="mystery/model", prompt_text=INTENT_PROMPT,
@@ -422,7 +446,7 @@ def test_unknown_unverified_and_blocked_models_stop_before_network(env, net, mon
     with pytest.raises(ModelNotReadyError, match="unknown model configuration"):
         make_runner(env, {"mystery/model": NoRec()}).run(task=Task.INTENT, cases=cases(), model_id="mystery/model",
                                                           prompt_text=INTENT_PROMPT, authorization=LiveAuthorization(models=("mystery/model",)))
-    # strict (pilot) stage blocks Jev on its unconfirmed schema; a blocked route blocks GPT-4.1 Nano
+    # blocked routes block both adapters before any request
     for mid, ad in ((JEV_MODEL_ID, jev_adapter()), (NANO_MODEL_ID, chat_adapter())):
         with pytest.raises(ModelNotReadyError, match="Registry blockers"):
             make_runner(env, {mid: ad}).run(task=Task.INTENT, cases=cases(), model_id=mid, prompt_text=INTENT_PROMPT, authorization=AUTH)
@@ -602,7 +626,7 @@ def test_temperature_is_omitted_when_the_pinned_route_does_not_list_it(net, unbl
     nano.classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=True)
     s_body, n_body = net.bodies
     assert "temperature" not in s_body and s_body["provider"] == {"order": ["anthropic"], "allow_fallbacks": False}
-    assert n_body["temperature"] == 0.0 and n_body["provider"] == {"order": ["openai"], "allow_fallbacks": False}
+    assert n_body["temperature"] == 0.0 and n_body["provider"] == {"order": ["azure"], "allow_fallbacks": False}
 
 
 def test_requested_route_is_recorded_without_claiming_who_served_the_request(net, unblock, env):
@@ -610,4 +634,58 @@ def test_requested_route_is_recorded_without_claiming_who_served_the_request(net
     r = ClassificationRunner({NANO_MODEL_ID: chat_adapter()}, env[2], env[1]).run(
         task=Task.INTENT, cases=cases(1), model_id=NANO_MODEL_ID, prompt_text=INTENT_PROMPT, authorization=AUTH, run_id="rt")
     rec = env[2].load()[0]
-    assert rec.requested_route == {"order": ["openai"], "allow_fallbacks": False} and rec.serving_provider is None
+    assert rec.requested_route == {"order": ["azure"], "allow_fallbacks": False} and rec.serving_provider is None
+
+
+def test_chat_adapter_404_routing_funnel_zdr_failure(net, unblock):
+    """Reproduces OpenRouter HTTP 404 when Guardrails remove OpenAI due to ZDR and fallback is disallowed."""
+    err_body = json.dumps({
+        "error": {
+            "message": "No endpoints found for openai/gpt-4.1-nano. Every candidate endpoint was removed during routing: Filter by Regional Surcharge removed azure/swedencentral; Filter by Guardrails removed openai (ZDR violation (account settings)); Filter by Fallback removed azure.",
+            "code": 404,
+            "metadata": {
+                "routing_funnel": [
+                    {"step": "Initial Endpoints", "endpoint_count": 3},
+                    {"step": "Filter by Regional Surcharge", "endpoint_count": 2},
+                    {"step": "Filter by Guardrails", "endpoint_count": 1},
+                ]
+            }
+        }
+    }).encode()
+    net.script = [http_err(404, err_body)]
+    with pytest.raises(ProviderError) as exc_info:
+        chat_adapter().classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=True)
+    assert exc_info.value.status == 404
+    assert exc_info.value.retryable is False
+    assert "No endpoints found" in str(exc_info.value)
+    assert "ZDR violation" in str(exc_info.value)
+
+
+def test_runner_aborts_on_consecutive_routing_404_errors(net, unblock, env):
+    """Verifies that consecutive 404 routing errors abort the run at max_consecutive_errors (3),
+    reporting UNAVAILABLE cost basis without recording ungrounded ledger spend."""
+    err_body = json.dumps({
+        "error": {
+            "message": "No endpoints found for openai/gpt-4.1-nano. Every candidate endpoint was removed during routing.",
+            "code": 404,
+        }
+    }).encode()
+    net.script = [http_err(404, err_body), http_err(404, err_body), http_err(404, err_body)]
+    runner = ClassificationRunner({NANO_MODEL_ID: chat_adapter()}, env[2], env[1], max_consecutive_errors=3)
+    five_cases = cases(5)
+    summary = runner.run(task=Task.INTENT, cases=five_cases, model_id=NANO_MODEL_ID, prompt_text=INTENT_PROMPT, authorization=AUTH, run_id="abort_run")
+
+    assert summary.aborted_reason == "3 consecutive errors"
+    assert summary.n_error == 3
+    assert len(summary.records) == 3
+    for rec in summary.records:
+        assert rec.status == "ERROR"
+        assert rec.cost_basis == "UNAVAILABLE"
+        assert rec.usage_source == "UNAVAILABLE"
+        assert rec.prompt_tokens is None
+        assert rec.completion_tokens is None
+        assert rec.recorded_cost_usd is None
+    # Ledger must remain clean (0 spend recorded for failed requests)
+    status = env[1].get_status()
+    assert status.cumulative_spend_usd == Decimal("0")
+    assert status.unresolved_spend_count == 0
