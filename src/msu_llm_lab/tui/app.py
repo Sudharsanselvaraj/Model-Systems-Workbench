@@ -72,7 +72,7 @@ class WorkbenchTUI:
         self.sidebar_cursor: int = 0     # Cursor position in sidebar list (0-7)
         self.focused_pane: str = "NAV"   # "NAV", "MAIN", or "COMMAND"
         self.model_cursor: int = 0       # Cursor for Model Catalogue table
-        self.show_roster: bool = False   # True when the comparison roster replaces the catalogue table
+        self.show_roster: bool = True    # the verified comparison roster is the default home; :catalogue shows the legacy planning table
         self.content_cursor: int = 0     # Cursor for current active main panel table rows
         self.input_mode: InputMode = InputMode.NORMAL
 
@@ -110,8 +110,19 @@ class WorkbenchTUI:
             or q in m.provider.lower()
         ]
 
+    def _model_rows(self) -> list:
+        """Rows the Model pane is currently showing: the ten roster participants, or the legacy filtered catalogue."""
+        if self.show_roster:
+            from msu_llm_lab.models.registry import REGISTRY
+            return list(REGISTRY)
+        return self.get_filtered_candidates()
+
     def _clamp_model_cursor(self) -> None:
         """Ensures model_cursor remains within bounds of current filtered list."""
+        if self.show_roster and self.nav_index == 0:
+            from msu_llm_lab.models.registry import REGISTRY
+            self.model_cursor = max(0, min(self.model_cursor, len(REGISTRY) - 1))
+            return
         filtered = self.get_filtered_candidates()
         if not filtered:
             self.model_cursor = 0
@@ -363,7 +374,7 @@ class WorkbenchTUI:
                 sys.stdout.flush()
             except Exception:
                 pass
-            self.console.print("[dim]Exited MSU LLM Inference Workbench.[/dim]")
+            self.console.print("[dim]Exited MSU LLM Workbench.[/dim]")
 
     def handle_key(self, key: str) -> None:
         """Processes keystrokes according to active input mode."""
@@ -547,7 +558,7 @@ class WorkbenchTUI:
         elif key in ("END",):
             if self.focused_pane == "MAIN":
                 if self.nav_index == 0:
-                    filtered = self.get_filtered_candidates()
+                    filtered = self._model_rows()
                     self.model_cursor = max(0, len(filtered) - 1)
                 elif self.nav_index == 1:
                     self.content_cursor = 5
@@ -576,7 +587,7 @@ class WorkbenchTUI:
         elif key in ("PAGE_DOWN",):
             if self.focused_pane == "MAIN":
                 if self.nav_index == 0:
-                    filtered = self.get_filtered_candidates()
+                    filtered = self._model_rows()
                     self.model_cursor = min(max(0, len(filtered) - 1), self.model_cursor + 3)
                 elif self.nav_index == 1:
                     self.content_cursor = min(5, self.content_cursor + 3)
@@ -618,7 +629,7 @@ class WorkbenchTUI:
                 self.sidebar_cursor = min(len(NAV_ITEMS) - 1, self.sidebar_cursor + 1)
             elif self.focused_pane == "MAIN":
                 if self.nav_index == 0:
-                    filtered = self.get_filtered_candidates()
+                    filtered = self._model_rows()
                     max_idx = max(0, len(filtered) - 1)
                     self.model_cursor = min(max_idx, self.model_cursor + 1)
                 elif self.nav_index == 1:
@@ -670,7 +681,7 @@ class WorkbenchTUI:
                 self.feedback_message = f"Focused {NAV_ITEMS[self.nav_index][1]} — use ↑/↓ to navigate"
             elif self.focused_pane == "MAIN":
                 if self.nav_index == 0:
-                    filtered = self.get_filtered_candidates()
+                    filtered = self._model_rows()
                     if filtered and 0 <= self.model_cursor < len(filtered):
                         cand = filtered[self.model_cursor]
                         self.feedback_message = (
@@ -757,8 +768,14 @@ class WorkbenchTUI:
             self.focused_pane = "MAIN"
             self.feedback_message = "Comparison roster: all participants, readiness and exact blockers"
             self.log_buffer.add("INFO", "Navigated to Comparison Roster")
-        elif cmd in ("models", "m", "1"):
+        elif cmd in ("catalogue", "catalog", "legacy"):
             self.show_roster = False
+            self.nav_index = 0
+            self.sidebar_cursor = 0
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Legacy planning catalogue (unverified prices); :roster shows the verified comparison roster"
+        elif cmd in ("models", "m", "1"):
+            self.show_roster = True
             self.nav_index = 0
             self.sidebar_cursor = 0
             self.focused_pane = "MAIN"
