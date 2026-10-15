@@ -34,6 +34,7 @@ AGGREGATORS = "https://www.getmaxim.ai/bifrost/llm-cost-calculator/provider/open
 class FactStatus(str, Enum):
     VERIFIED_PRIMARY = "VERIFIED_PRIMARY"  # stated on the provider's or OpenRouter's own documentation
     USER_SUPPLIED = "USER_SUPPLIED"        # figure supplied by the project owner; must be re-verified before any live run
+    LIVE_OBSERVED = "LIVE_OBSERVED"        # seen in a stored real response (evidence recorded); NOT a primary-source verification
     SECONDARY_ONLY = "SECONDARY_ONLY"      # only third-party or summarized sources; not confirmed on a primary page
     CONFLICTING = "CONFLICTING"            # sources disagree
     UNKNOWN = "UNKNOWN"
@@ -52,9 +53,17 @@ class Fact(BaseModel):
     source_urls: List[str] = Field(default_factory=list)
     checked_on: Optional[date] = None
     note: str = ""
+    evidence: Optional[Dict[str, Any]] = None   # required for LIVE_OBSERVED: run ids, resolved model, fields, observation time
 
     @model_validator(mode="after")
     def _honest(self):
+        if self.status == FactStatus.LIVE_OBSERVED:
+            need = {"run_ids", "resolved_model_id", "evidence_fields", "observed_at"}
+            if not self.evidence or not need <= set(self.evidence):
+                raise ValueError(f"a LIVE_OBSERVED fact needs evidence with {sorted(need)}")
+            if self.checked_on is None:
+                raise ValueError("any non-UNKNOWN fact needs checked_on")
+            return self
         if self.status == FactStatus.UNKNOWN and self.value is not None:
             raise ValueError("an UNKNOWN fact must not carry a value; put reference figures in the note")
         if self.status != FactStatus.UNKNOWN and self.checked_on is None:
@@ -70,6 +79,16 @@ def unknown(note: str) -> Fact:
 
 def fact(value: Any, status: FactStatus, urls: List[str], note: str = "") -> Fact:
     return Fact(value=value, status=status, source_urls=urls, checked_on=CHECKED_ON, note=note)
+
+
+def observed(value: Any, urls: List[str], evidence: Dict[str, Any], note: str = "") -> Fact:
+    """A fact seen in a stored live response. Keeps the documentation URLs it was expected from; never claims primary verification."""
+    return Fact(value=value, status=FactStatus.LIVE_OBSERVED, source_urls=urls, checked_on=CHECKED_ON, note=note, evidence=evidence)
+
+
+def schema_fact_ok(f: "Fact") -> bool:
+    """Response-schema facts are satisfied by primary documentation or by recorded live observation. Nothing else is."""
+    return f.status in (FactStatus.VERIFIED_PRIMARY, FactStatus.LIVE_OBSERVED)
 
 
 class RouteOption(BaseModel):
@@ -133,6 +152,7 @@ class ModelRecord(BaseModel):
     route: RouteRecord = Field(default_factory=RouteRecord)
     candidate_routes: List[RouteOption] = Field(default_factory=list)
     pinned_tag: Optional[str] = None
+    request_overrides: Dict[str, Any] = Field(default_factory=dict)   # extra request fields approved for this participant (whitelisted by the provider adapter)
     production_reported_name: Optional[str] = None
     production_parity: Fact = Field(default_factory=lambda: unknown("Not applicable or not established."))
     open_decisions: List[str] = Field(default_factory=list)
@@ -144,7 +164,9 @@ class ModelRecord(BaseModel):
         """Everything a live run needs, including student-derived data: facts not VERIFIED_PRIMARY, plus the route."""
         required = ("requested_model_id", "endpoint", "request_fields", "response_shape", "usage_fields",
                     "input_price_per_1m_usd", "output_price_per_1m_usd", "data_policy")
-        out = [n for n in required if getattr(self, n).status != FactStatus.VERIFIED_PRIMARY]
+        schema_facts = {"response_shape", "usage_fields"}
+        out = [n for n in required if not (getattr(self, n).status == FactStatus.VERIFIED_PRIMARY
+                                           or (n in schema_facts and schema_fact_ok(getattr(self, n))))]
         return out + (["route"] if self.route.status != RouteStatus.READY else [])
 
     def synthetic_blockers(self, stage: str = "pilot") -> List[str]:
@@ -160,7 +182,7 @@ class ModelRecord(BaseModel):
         out = []
         for n in required:
             st = getattr(self, n).status
-            if st == FactStatus.VERIFIED_PRIMARY:
+            if st == FactStatus.VERIFIED_PRIMARY or (n in schema_facts and st == FactStatus.LIVE_OBSERVED):
                 continue
             if stage == "smoke" and n in schema_facts and st == FactStatus.SECONDARY_ONLY:
                 continue
@@ -171,6 +193,27 @@ class ModelRecord(BaseModel):
         """Unknown policy means no student-derived data may be sent."""
         out = self.synthetic_blockers()
         return out + (["data_policy"] if self.data_policy.status != FactStatus.VERIFIED_PRIMARY and "data_policy" not in out else [])
+
+
+# Evidence from the stored synthetic smoke run (reports/smoke/smoke_f2e1066f.jsonl, local): 10 Jev records, every one status OK after strict validation.
+JEV_LIVE_EVIDENCE = {
+    "run_ids": ["smoke_f2e1066f-jev-1.14-INTENT", "smoke_f2e1066f-jev-1.14-LEAD"],
+    "resolved_model_id": "typesafe/jev-1.14-20261014",
+    "observed_at": "2026-10-15T09:05:02Z/2026-10-15T09:05:09Z",
+    "observed_snapshots": ["typesafe/jev-1.14-20261014"],
+    "evidence_fields": {
+        "response_shape": ["model", "provider", "answers.choice (selected label + probabilities + confidence)", "answers.noul (probability of yes)"],
+        "usage_fields": ["input_tokens", "output_tokens", "cost (credits; USD ratio unverified)"],
+        "resolved_version_reporting": ["model = typesafe/jev-1.14-20261014"],
+    },
+    "records": 10, "scope": "synthetic fixtures only",
+}
+
+
+def observed_snapshots(requested_model_id: str) -> List[str]:
+    rec = record_for_model_id(requested_model_id)
+    ev = rec.resolved_version_reporting.evidence if rec else None
+    return list((ev or {}).get("observed_snapshots", []))
 
 
 JEV_1_14 = ModelRecord(
@@ -189,18 +232,21 @@ JEV_1_14 = ModelRecord(
          "noul": {"type": "noul", "instructions": "required", "criteria": "optional"}},
         FactStatus.VERIFIED_PRIMARY, [TS_CHOICE, TS_PRIMITIVES, OR_JEV_GUIDE],
         "Choice and Noul field names come from TypeSafe's own docs; the OpenRouter guide documents only the top-level fields."),
-    response_shape=fact(
+    response_shape=observed(
         {"envelope": ["model", "answers", "usage", "id", "provider"],
          "choice": ["type", "choice", "probabilities", "confidence"], "noul": ["type", "noul"]},
-        FactStatus.SECONDARY_ONLY, [OR_JEV_BLOG, TS_CHOICE, TS_PRIMITIVES],
-        "Choice/Noul answer keys are in TypeSafe's docs; the OpenRouter envelope (answers, id, provider) comes from an example for jev-1.13 only."),
+        [OR_JEV_BLOG, TS_CHOICE, TS_PRIMITIVES], {**JEV_LIVE_EVIDENCE, "evidence_fields": JEV_LIVE_EVIDENCE["evidence_fields"]["response_shape"]},
+        "Documented in TypeSafe's docs and an OpenRouter example for 1.13; observed in 10 stored 1.14 responses that passed strict validation. "
+        "LIVE_OBSERVED is not primary-source verification."),
     output_type=fact("typed structured answer; no free text or reasoning", FactStatus.VERIFIED_PRIMARY, [OR_JEV_GUIDE, TS_PRIMITIVES],
         "Choice: selected option + per-option probabilities + separate confidence (derived from probability spread; not a stated accuracy). "
         "Noul: probability of yes only; no confidence field."),
-    resolved_version_reporting=fact("response 'model' field holds the served snapshot, e.g. typesafe/jev-1.13-20260917",
-        FactStatus.SECONDARY_ONLY, [OR_JEV_BLOG], "Seen for 1.13 only; confirm for 1.14 on the first real response."),
-    usage_fields=fact({"input_tokens": "int", "output_tokens": "int", "cost": "USD"}, FactStatus.SECONDARY_ONLY, [OR_JEV_BLOG, OR_JEV_GUIDE],
-        "Guide confirms usage.cost; token field names (input_tokens/output_tokens) come from the blog example and TypeSafe's direct-API docs."),
+    resolved_version_reporting=observed("response 'model' field holds the served snapshot, e.g. typesafe/jev-1.14-20261014",
+        [OR_JEV_BLOG], {**JEV_LIVE_EVIDENCE, "evidence_fields": JEV_LIVE_EVIDENCE["evidence_fields"]["resolved_version_reporting"]},
+        "Documented for 1.13; observed for 1.14 in the stored smoke records (snapshot 20261014)."),
+    usage_fields=observed({"input_tokens": "int", "output_tokens": "int", "cost": "credits (USD ratio unverified)"},
+        [OR_JEV_BLOG, OR_JEV_GUIDE], {**JEV_LIVE_EVIDENCE, "evidence_fields": JEV_LIVE_EVIDENCE["evidence_fields"]["usage_fields"]},
+        "Token fields and usage.cost observed in stored 1.14 responses. The cost unit is credits; its conversion to USD remains UNKNOWN."),
     input_price_per_1m_usd=fact("0.042", FactStatus.VERIFIED_PRIMARY, [OR_JEV_PROVIDERS],
         "OpenRouter's providers page for typesafe/jev-1.14 lists $0.042 per 1M input tokens (one listed provider: TypeSafe). "
         "Matches the owner's own check on 2026-10-15. Re-verify before any live run."),
@@ -246,7 +292,7 @@ _POLICY_NOTE = ("Provider privacy-policy URLs exist in OpenRouter's providers me
 
 def _chat_record(key: str, display: str, roles: List[str], tasks: List[str], model_id: str, endpoints: List[RouteOption], pin_tag: str,
                  *, production_name: Optional[str] = None, created: str = "", extra_decisions: Optional[List[str]] = None,
-                 extra_assumptions: Optional[List[str]] = None, version_note: str = "") -> ModelRecord:
+                 extra_assumptions: Optional[List[str]] = None, version_note: str = "", request_overrides: Optional[Dict[str, Any]] = None) -> ModelRecord:
     """A chat-completions participant built from OpenRouter's public endpoint metadata (checked 2026-10-15)."""
     src = [OR_ENDPOINTS.format(model_id)]
     pin = next(e for e in endpoints if e.tag == pin_tag)
@@ -284,7 +330,7 @@ def _chat_record(key: str, display: str, roles: List[str], tasks: List[str], mod
                          "Plain-text output; no response_format.", *(extra_assumptions or [])],
             blocked_reasons=[],
         ),
-        candidate_routes=endpoints, pinned_tag=pin_tag, production_reported_name=production_name,
+        candidate_routes=endpoints, pinned_tag=pin_tag, production_reported_name=production_name, request_overrides=dict(request_overrides or {}),
         production_parity=(unknown("Production deployment unknown until the Dify export; this OpenRouter route is a benchmark route only.") if production_name
                            else unknown("Not a production-reported participant.")),
         open_decisions=["Owner approval of the pinned provider route is required.",
@@ -337,32 +383,56 @@ _ENDPOINTS_SONNET55 = [_ep("Anthropic", "anthropic", "2.00", "10.00", 1000000, 1
                        _ep("Azure", "azure/global", "2.00", "10.00", 1000000, 128000, _SONNET_COMMON + " structured_outputs max_completion_tokens", 96.25),
                        _ep("Claude Platform on AWS", "claude-on-aws", "2.00", "10.00", 1000000, 128000, _SONNET_COMMON, 100.0)]
 
+_HAIKU_COMMON = "reasoning include_reasoning max_tokens stop tool_choice tools response_format verbosity reasoning_effort"
+# OpenRouter public endpoint metadata for anthropic/claude-haiku-5.5, read 2026-10-15 (no key, no model request). Temperature is NOT listed on any route.
+# Prices are USD per 1M tokens; requests above 100,000 prompt tokens use higher override rates (not relevant to the ~3,000-token states used here).
+_ENDPOINTS_HAIKU = [_ep("Anthropic", "anthropic", "0.10", "0.50", 1000000, 128000, _HAIKU_COMMON + " structured_outputs", 100.0),
+                    _ep("Google", "google-vertex/global", "0.10", "0.50", 1000000, 128000, _HAIKU_COMMON + " structured_outputs", 100.0),
+                    _ep("Claude Platform on AWS", "claude-on-aws", "0.10", "0.50", 1000000, 128000, _HAIKU_COMMON, 100.0),
+                    _ep("Azure", "azure/global", "0.10", "0.50", 1000000, 128000, _HAIKU_COMMON + " structured_outputs max_completion_tokens", 100.0),
+                    _ep("Amazon Bedrock", "amazon-bedrock", "0.10", "0.50", 1000000, 128000, _HAIKU_COMMON, 100.0),
+                    _ep("Google", "google-vertex/europe", "0.11", "0.55", 1000000, 128000, _HAIKU_COMMON + " structured_outputs", 100.0),
+                    _ep("Google", "google-vertex/us", "0.11", "0.55", 1000000, 128000, _HAIKU_COMMON + " structured_outputs", 100.0),
+                    _ep("Azure", "azure/us", "0.11", "0.55", 1000000, 128000, _HAIKU_COMMON + " structured_outputs max_completion_tokens", None),
+                    _ep("Amazon Bedrock", "amazon-bedrock/us-east-1", "0.11", "0.55", 1000000, 128000, _HAIKU_COMMON, 100.0),
+                    _ep("Amazon Bedrock", "amazon-bedrock/eu-west-1", "0.11", "0.55", 1000000, 128000, _HAIKU_COMMON, 100.0)]
+
 _JEV_ENDPOINT_NOTE = "OpenRouter endpoints metadata lists one endpoint named `typesafe/jev-1.14-20261014`, so a dated snapshot of this form exists for 1.14."
 
 ROSTER: List[ModelRecord] = [
     _chat_record("baseline-intent-gemini-3.5-flash-lite", "Gemini 3.5 Flash Lite (production baseline; benchmark route)", ["PRODUCTION_BASELINE"], ["INTENT"],
-                 "google/gemini-3.5-flash-lite", _ENDPOINTS_GEMINI, "google-ai-studio", production_name="Gemini 3.5 Flash Lite",
+                 "google/gemini-3.5-flash-lite", _ENDPOINTS_GEMINI, "google-vertex/global", production_name="Gemini 3.5 Flash Lite",
+                 extra_assumptions=["Owner-approved re-pin on 2026-10-15 from `google-ai-studio` to `google-vertex/global`: in run bench-045a3c43f1a5 the account's Zero-Data-Retention guardrail removed `google-ai-studio` (HTTP 404). Same listed price; a different provider hosts the model."],
                  extra_decisions=["The Dify deployment (provider, tier, settings) is unknown; this is the standard-tier Google AI Studio route chosen because it supports temperature. "
                                   "Results are labelled benchmark-route, not production.",
                                   "The legacy catalog lists $0.075/$0.30 for this model; OpenRouter lists $0.30/$2.50 (standard) and $0.15/$1.25 (flex). The registry is authoritative."]),
     _chat_record("baseline-lead-gpt-4.1-mini", "GPT-4.1-mini (production baseline; benchmark route)", ["PRODUCTION_BASELINE"], ["LEAD"],
-                 "openai/gpt-4.1-mini", _ENDPOINTS_41MINI, "openai", production_name="GPT-4.1-mini",
+                 "openai/gpt-4.1-mini", _ENDPOINTS_41MINI, "azure", production_name="GPT-4.1-mini",
+                 extra_assumptions=["Owner-approved re-pin on 2026-10-15 from `openai` to `azure`: in run bench-045a3c43f1a5 the account's Zero-Data-Retention guardrail removed `openai` (HTTP 404). Same listed price; a different provider hosts the model."],
                  extra_decisions=["The Dify deployment (provider, settings) is unknown; results are labelled benchmark-route, not production."]),
     JEV_1_14,
-    _chat_record("gpt-4.1-nano", "GPT-4.1 Nano (OpenAI)", ["CANDIDATE"], ["INTENT", "LEAD"], "openai/gpt-4.1-nano", _ENDPOINTS_NANO, "openai"),
-    _chat_record("gpt-4o-mini", "GPT-4o mini (OpenAI)", ["CANDIDATE"], ["INTENT", "LEAD"], "openai/gpt-4o-mini", _ENDPOINTS_4OMINI, "openai"),
-    _chat_record("qwen3.5-35b-a3b", "Qwen3.5 35B A3B", ["CANDIDATE"], ["INTENT", "LEAD"], "qwen/qwen3.5-35b-a3b", _ENDPOINTS_QWEN, "deepinfra/fp8",
+    _chat_record("gpt-4.1-nano", "GPT-4.1 Nano (OpenAI)", ["CANDIDATE"], ["INTENT", "LEAD"], "openai/gpt-4.1-nano", _ENDPOINTS_NANO, "azure"),
+    _chat_record("gpt-4o-mini", "GPT-4o mini (OpenAI)", ["CANDIDATE"], ["INTENT", "LEAD"], "openai/gpt-4o-mini", _ENDPOINTS_4OMINI, "azure",
+                 extra_assumptions=["Owner-approved re-pin on 2026-10-15 from `openai` to `azure`: in run bench-045a3c43f1a5 the account's Zero-Data-Retention guardrail removed `openai` (HTTP 404). Same listed price; a different provider hosts the model."]),
+    _chat_record("qwen3.5-35b-a3b", "Qwen3.5 35B A3B", ["CANDIDATE"], ["INTENT", "LEAD"], "qwen/qwen3.5-35b-a3b", _ENDPOINTS_QWEN, "deepinfra/fp8", request_overrides={"reasoning": {"enabled": False}},
+                 extra_assumptions=["Owner-approved request change on 2026-10-15: `reasoning.enabled=false`. In run bench-045a3c43f1a5 all 60 outputs were empty because the 16/24-token completion cap was spent on reasoning."],
                  extra_decisions=["Seven providers are listed; DeepInfra fp8 (US, 100% 30-minute uptime) is proposed. Alibaba (SG/CN datacenters) is the vendor route. Choose before the pilot."]),
     _chat_record("deepseek-chat-v3.1", "DeepSeek Chat v3.1", ["CANDIDATE"], ["INTENT", "LEAD"], "deepseek/deepseek-chat-v3.1", _ENDPOINTS_DEEPSEEK, "coreweave/fp8",
                  extra_decisions=["CoreWeave fp8 is proposed to avoid 4-bit quantisation (DeepInfra is fp4) and the 7,168-token SambaNova completion limit. DeepSeek's own route is not listed."]),
     _chat_record("mistral-small-3.2-24b-instruct", "Mistral Small 3.2 24B Instruct", ["CANDIDATE"], ["INTENT", "LEAD"], "mistralai/mistral-small-3.2-24b-instruct", _ENDPOINTS_MISTRAL, "mistral/eu",
                  extra_decisions=["The first-party `mistral/eu` route is proposed; its 32,768-token context is enough for the prompts and states used here but is the smallest in the roster."]),
-    _chat_record("gpt-4.1", "GPT-4.1 (frontier reference)", ["FRONTIER_REFERENCE"], ["INTENT", "LEAD"], "openai/gpt-4.1", _ENDPOINTS_41, "openai"),
+    _chat_record("gpt-4.1", "GPT-4.1 (frontier reference)", ["FRONTIER_REFERENCE"], ["INTENT", "LEAD"], "openai/gpt-4.1", _ENDPOINTS_41, "azure",
+                 extra_assumptions=["Owner-approved re-pin on 2026-10-15 from `openai` to `azure`: in run bench-045a3c43f1a5 the account's Zero-Data-Retention guardrail removed `openai` (HTTP 404). Same listed price; a different provider hosts the model."]),
     _chat_record("claude-sonnet-5.5", "Claude Sonnet 5.5 (frontier reference)", ["FRONTIER_REFERENCE"], ["INTENT", "LEAD"], "anthropic/claude-sonnet-5.5",
                  _ENDPOINTS_SONNET55, "anthropic", version_note="Endpoint names carry the fixed snapshot 20260928; the dated slug resolves to the same listing but direct requestability is unverified.",
                  extra_assumptions=["Latest Claude Sonnet found on OpenRouter on 2026-10-15 (created Sept 2026); Sonnet 5 (snapshot 20260630) is the previous version."],
                  extra_decisions=["Use `anthropic/claude-sonnet-5.5` and record the resolved snapshot (expected 20260928) in every record; do not use the moving alias ~anthropic/claude-sonnet-latest.",
                                   "Temperature is not listed for this model's endpoints, so it is omitted; outputs may therefore not be deterministic."]),
+    _chat_record("claude-haiku-5.5", "Claude Haiku 5.5 (Anthropic)", ["CANDIDATE"], ["INTENT", "LEAD"], "anthropic/claude-haiku-5.5", _ENDPOINTS_HAIKU, "anthropic",
+                 version_note="Endpoint metadata names the dated snapshot anthropic/claude-haiku-5.5-20261007; the resolved snapshot is recorded from every response.",
+                 extra_assumptions=["Added on 2026-10-15 as an additional candidate, distinct from the Claude Sonnet 5.5 frontier reference. Claude Haiku 4.5 or any other version is NOT substituted.",
+                                    "Task scope INTENT and LEAD uses the same plain-text contract as the other chat participants; compatibility is covered by offline tests with a mocked transport and is unconfirmed live."],
+                 extra_decisions=["The sibling Sonnet 5.5 returned empty outputs on some requests under the 16/24-token completion caps; Haiku shares the model family, so a synthetic live check or the first block will show whether it does too. No reasoning override is set, to stay comparable with Sonnet."]),
 ]
 REGISTRY: Dict[str, ModelRecord] = {r.key: r for r in ROSTER}
 
