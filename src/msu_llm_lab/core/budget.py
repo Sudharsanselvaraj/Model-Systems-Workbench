@@ -26,6 +26,8 @@ class BudgetStatus(BaseModel):
     per_run_ceiling_usd: Decimal
     per_case_ceiling_usd: Decimal
     
+    simulated_spend_usd: Decimal = Decimal("0")  # dry-run simulations; shown for transparency, never counted against a ceiling
+
     is_pilot_exhausted: bool
     is_total_exhausted: bool
     
@@ -44,6 +46,7 @@ class BudgetService:
         self.db.init_db()
         _, total_spend = self.db.get_cumulative_spend(include_estimates=False)
         _, pilot_spend = self.db.get_pilot_spend(include_estimates=False)
+        _, simulated = self.db.get_simulated_spend()
 
         rem_total = max(Decimal("0.00"), self.policy.total_budget_usd - total_spend)
         rem_pilot = max(Decimal("0.00"), self.policy.pilot_budget_usd - pilot_spend)
@@ -54,6 +57,7 @@ class BudgetService:
             remaining_total_usd=rem_total,
             pilot_ceiling_usd=self.policy.pilot_budget_usd,
             pilot_spend_usd=pilot_spend,
+            simulated_spend_usd=simulated,
             remaining_pilot_usd=rem_pilot,
             per_run_ceiling_usd=self.policy.per_run_ceiling_usd,
             per_case_ceiling_usd=self.policy.per_case_ceiling_usd,
@@ -121,8 +125,9 @@ class BudgetService:
         run_id: Optional[str] = None,
         is_pilot: bool = True,
         is_preflight_estimate: bool = False,
+        is_simulated: bool = False,
     ) -> None:
-        """Commits an actual or estimated transaction to the ledger."""
+        """Commits an actual, estimated or simulated (dry-run) transaction. Simulated entries never count against ceilings."""
         self.db.init_db()
         self.db.record_transaction(
             transaction_id=transaction_id,
@@ -133,6 +138,7 @@ class BudgetService:
             run_id=run_id,
             is_pilot=is_pilot,
             is_preflight_estimate=is_preflight_estimate,
+            is_simulated=is_simulated,
         )
 
     def calculate_case_cost(
