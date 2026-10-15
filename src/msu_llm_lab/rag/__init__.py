@@ -9,13 +9,11 @@ from msu_llm_lab.rag.models import (
 from msu_llm_lab.rag.retriever import (
     BaseRetriever,
     KeywordBM25Retriever,
-    MockRetriever,
 )
 from msu_llm_lab.rag.runner import RAGBenchmarkRunner
 
 __all__ = [
     "BaseRetriever",
-    "MockRetriever",
     "KeywordBM25Retriever",
     "RetrievalResult",
     "RAGCaseEvaluation",
