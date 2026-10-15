@@ -1,4 +1,4 @@
-"""Schemas package for MSU LLM Inference Workbench."""
+"""Schemas package for MSU LLM Workbench."""
 
 from msu_llm_lab.schemas.evaluation import (
     DataClassification,
