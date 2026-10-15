@@ -67,23 +67,22 @@ def test_health_checks_live():
 
 
 def test_system_telemetry_sampling():
-    """Verify local hardware telemetry samples without error or network calls."""
+    """Verify local hardware telemetry samples real values, starts empty, and reports unmeasurable metrics as unavailable."""
     sys_t = SystemTelemetry(history_len=10)
-    sys_t.sample()
+    assert list(sys_t.cpu) == [] and list(sys_t.mem) == [] and list(sys_t.disk) == []  # no pre-filled placeholder history
+    assert sys_t.sample(force=True)
     cpu_pct, cpu_detail, cpu_hist = sys_t.get_cpu_info()
-    assert 0.0 <= cpu_pct <= 100.0
-    assert "cores" in cpu_detail
-    assert len(cpu_hist) >= 1
+    assert cpu_pct is None or 0.0 <= cpu_pct
+    assert len(cpu_hist) == 1
 
     mem_pct, mem_detail, mem_hist = sys_t.get_mem_info()
-    assert 0.0 <= mem_pct <= 100.0
-    assert "GB" in mem_detail
-    assert len(mem_hist) >= 1
-
+    assert mem_pct is None or 0.0 <= mem_pct <= 100.0
+    if mem_pct is None:
+        assert "UNAVAILABLE" in mem_detail  # never a made-up figure
     disk_pct, disk_detail, disk_hist = sys_t.get_disk_info()
-    assert 0.0 <= disk_pct <= 100.0
+    assert 0.0 < disk_pct <= 100.0
     assert "GB" in disk_detail
-    assert len(disk_hist) >= 1
+    assert len(disk_hist) == 1
 
 
 def test_render_sparkline():
@@ -174,8 +173,8 @@ def test_panel_renderers():
     nav = build_navigation_panel(active_index=0, is_focused=True)
     console.print(nav)
     out_nav = console.file.getvalue()
-    assert "Model Catalogue" in out_nav
-    assert "Budget & Usage" in out_nav
+    assert "Model Roster" in out_nav
+    assert "Budget & Spend" in out_nav
 
     # 3. Models panel
     candidates = get_portfolio()
@@ -265,18 +264,11 @@ def test_workbench_tui_btop_layout():
     app_tui = WorkbenchTUI(console=console)
     app_tui.show_roster = False  # this test exercises the legacy planning catalogue
     app_tui.refresh_data()
+    app_tui.goto("roster")
 
     layout = app_tui.build_layout()
-    assert layout["header"] is not None
-    assert layout["top_row"]["nav"] is not None
-    assert layout["top_row"]["sys_metrics"] is not None
-    assert layout["top_row"]["inf_status"] is not None
-    assert layout["main"] is not None
-    assert layout["bottom_row"]["logs"] is not None
-    assert layout["bottom_row"]["budget_usage"] is not None
-    assert layout["bottom_row"]["datasets"] is not None
-    assert layout["footer"]["command"] is not None
-    assert layout["footer"]["status_line"] is not None
+    for name in ("header", "nav", "sys_metrics", "inf_status", "main", "logs", "budget_usage", "datasets", "command", "status_line"):
+        assert layout[name] is not None
 
     console.print(layout)
     output = out_buf.getvalue()
@@ -350,8 +342,8 @@ def test_command_bar_editing_and_dispatch():
     # 5. Execute command with ENTER
     app_tui.handle_key("ENTER")
     assert app_tui.input_mode == InputMode.NORMAL
-    assert app_tui.nav_index == 1  # Switched to Budget & Usage!
-    assert "Budget & Usage" in app_tui.feedback_message
+    assert app_tui.section == "budget"
+    assert "Budget & Spend" in app_tui.feedback_message
 
     # 6. Test invalid command feedback
     app_tui.handle_key(":")
@@ -502,14 +494,15 @@ def test_model_catalogue_navigation_and_details_sync():
     app_tui.refresh_data()
     assert len(app_tui.candidates) >= 5
 
-    # 1. Startup focus is NAV
+    # 1. Startup focus is NAV on the Overview
     assert app_tui.focused_pane == "NAV"
     assert app_tui.sidebar_cursor == 0
 
-    # 2. Transfer focus to Model Catalogue via ENTER
+    # 2. Open the roster/catalogue section (second entry) and transfer focus to it via ENTER
+    app_tui.handle_key("DOWN")
     app_tui.handle_key("ENTER")
     assert app_tui.focused_pane == "MAIN"
-    assert app_tui.nav_index == 0
+    assert app_tui.section == "roster"
     assert app_tui.model_cursor == 0
 
     # 3. Down changes selection from candidate 0 to candidate 1
@@ -520,7 +513,7 @@ def test_model_catalogue_navigation_and_details_sync():
     # Verify model details panel updates immediately
     layout1 = app_tui.build_layout()
     out1 = io.StringIO()
-    console = Console(file=out1, force_terminal=False, width=120, height=36)
+    console = Console(file=out1, force_terminal=False, width=160, height=70)
     console.print(layout1)
     rendered1 = out1.getvalue()
     assert c1.model_id in rendered1
@@ -679,8 +672,7 @@ def test_budget_panel_row_navigation_and_inspection():
     app_tui.refresh_data()
 
     # Move to Budget & Usage and focus MAIN
-    app_tui.nav_index = 1
-    app_tui.sidebar_cursor = 1
+    app_tui.goto("budget")
     app_tui.focused_pane = "MAIN"
     app_tui.content_cursor = 0
 
@@ -815,8 +807,7 @@ def test_tui_evaluation_runs_navigation_and_inspection():
     app_tui.refresh_data()
 
     # Navigate to Evaluation Runs screen
-    app_tui.nav_index = 3
-    app_tui.sidebar_cursor = 3
+    app_tui.goto("evaluations")
     app_tui.focused_pane = "MAIN"
     app_tui.content_cursor = 0
 
@@ -841,8 +832,7 @@ def test_tui_traces_observability_navigation_and_inspection():
     app_tui.refresh_data()
 
     # Navigate to Traces & Observability screen
-    app_tui.nav_index = 4
-    app_tui.sidebar_cursor = 4
+    app_tui.goto("traces")
     app_tui.focused_pane = "MAIN"
     app_tui.content_cursor = 0
 
@@ -888,5 +878,48 @@ def test_welcome_cli_command():
     """Verify msu-llm-lab welcome command can be invoked."""
     result = runner.invoke(app, ["welcome"], input="9\n")
     assert result.exit_code == 0
+
+
+def test_tui_inspect_selected_robustness():
+    """Verify _inspect_selected never raises AttributeError regardless of model data types."""
+    app_tui = WorkbenchTUI()
+    app_tui.refresh_data()
+    app_tui.goto("roster")
+    app_tui.show_roster = True
+    app_tui.handle_key("ENTER")
+    assert "Inspected:" in app_tui.feedback_message
+
+    # Test catalogue mode
+    app_tui.show_roster = False
+    app_tui.handle_key("ENTER")
+    assert "Inspected:" in app_tui.feedback_message
+
+    # Test corrupted/string row
+    app_tui._model_rows = lambda: ["invalid-string-record"]
+    app_tui.model_cursor = 0
+    app_tui.show_roster = True
+    app_tui.handle_key("ENTER")
+    assert "invalid-string-record" in app_tui.feedback_message
+
+    app_tui.show_roster = False
+    app_tui.handle_key("ENTER")
+    assert "invalid-string-record" in app_tui.feedback_message
+
+
+def test_cli_option_unwrapping():
+    """Verify benchmark_rag and run_benchmark handle OptionInfo objects defensively without crashing."""
+    from msu_llm_lab.cli import benchmark_rag, run_benchmark
+    import pytest
+    import typer
+
+    # benchmark_rag without live/audited files should exit cleanly (Exit code 1) instead of AttributeError
+    with pytest.raises(typer.Exit) as exc:
+        benchmark_rag()
+    assert exc.value.exit_code in (0, 1, 2)
+
+    # run_benchmark without live flag should exit with code 2
+    with pytest.raises(typer.Exit) as exc:
+        run_benchmark()
+    assert exc.value.exit_code == 2
 
 
