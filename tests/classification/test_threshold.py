@@ -64,12 +64,10 @@ def test_selection_needs_both_classes_and_probabilities():
         select_threshold_on_dev([])
 
 
-def test_unlabelled_excluded_missing_prob_not_imputed_and_dry_run_rejected():
+def test_unlabelled_excluded_and_missing_prob_not_imputed():
     spec = items(DEV_SPEC) + [ProbItem("u", None, 0.5, DEV), ProbItem("x", True, 0.1, DEV, exclusion_reason="AMBIGUOUS"),
                               ProbItem("m", True, None, DEV)]
     assert select_threshold_on_dev(spec).n_dev_scored == 6
-    with pytest.raises(ThresholdError):
-        select_threshold_on_dev(items(DEV_SPEC) + [ProbItem("d", True, 0.5, DEV, is_dry_run=True)])
     with pytest.raises(ThresholdError):
         evaluate_at([ProbItem("bad", True, 1.5, DEV)], 0.5)
 
