@@ -121,3 +121,14 @@ Limits, stated plainly:
 3. Review and approval of all labels, independent of the builder's summary.
 4. Whether the assistant-answer redactions (institutional phones and emails) should be loosened.
 5. A verified provider data policy before any of this text can go to a model.
+
+## 9. Hardening pass (after an external code review)
+
+These changes apply to the code and to any NEW preparation run. The existing `prep-v1` folder was not regenerated or modified.
+
+- **No silent overwrite.** `prepare-classification-data` now refuses to write into a non-empty output folder (it checks before reading the CSV). A folder that holds an `annotations/` directory gets a specific protective message. Use `--new-version` to write a sibling version (`prep-v1-r2`, `prep-v1-r3`, ...). Human annotations belong in a separate versioned `annotations/` folder that no rerun may touch, keyed by **row id** (`R0001...`, file order), not by group id.
+- **Run provenance.** The manifest now records a code fingerprint (hash of the preparation, summary-builder, contract and split sources), the git commit, creation time and all parameters (session thresholds, seed, split ratios, challenge fraction).
+- **O1 narrowed.** A bare "no" or "thanks" is treated as the unresolved O1 case only when the assistant's previous message made a concrete non-counsellor offer ("would you like...", "do you want...", "shall I...", "can I help with..."). A plain clarifying question ending in "?" no longer qualifies, a generic "let me know" closing no longer qualifies, and counsellor-connect offers follow the handoff rule instead. The existing `prep-v1` candidates were made with the broader rule (5 intent cases per policy were excluded under O1), so some of those exclusions may be over-broad until a new version is prepared.
+- **Pseudonymisation is not anonymisation.** Group and trace ids are salted hashes. `prep-v1` used a PUBLIC constant salt, so anyone holding the export can re-link them. A new version can use a private secret by setting `MSU_PREP_SALT` in the shell before running. The salt is never written to any file; only a short `salt_id` is recorded. **Migration:** changing the salt changes every group id and therefore the group-level splits, so a protected version is a new dataset; annotations must be migrated by row id. Existing ids were not rotated.
+- **Limitations are visible everywhere.** Every derived record now carries `privacy_notice` (`REDACTION_INCOMPLETE_NO_NER;PSEUDONYMS_ARE_NOT_ANONYMOUS;LOCAL_ONLY`), and the README and manifest say so.
+- **Views are unvalidated.** The challenge view is a candidate pool chosen by phrase hints before any label review, and the natural view is not validated as representative. Candidates and split assignments carry `view_status: HEURISTIC_UNVALIDATED`, and the manifest explains both.
