@@ -63,6 +63,7 @@ class ProviderRequest(BaseModel):
     provider_preferences: Optional[Dict[str, Any]] = Field(
         default=None, description="OpenRouter `provider` routing object (e.g. pin + no fallbacks); sent only when set"
     )
+    extra_fields: Optional[Dict[str, Any]] = Field(default=None, description="Owner-approved per-model request fields (whitelisted by the adapter, e.g. `reasoning`)")
     case_id: Optional[str] = None
 
 
@@ -85,6 +86,8 @@ class ProviderResponse(BaseModel):
     retry_errors: List[str] = Field(default_factory=list, description="Scrubbed error codes of failed attempts before success")
     native_cost: Optional[Decimal] = Field(default=None, description="Provider-reported usage.cost in its own unit (credits); preserved as received")
     native_cost_unit: Optional[str] = Field(default=None, description="Unit label of native_cost; it is booked as USD only once the unit is verified")
+    finish_reason: Optional[str] = Field(default=None, description="choices[0].finish_reason exactly as the provider reported it; None when absent")
+    reasoning_tokens: Optional[int] = Field(default=None, description="usage.completion_tokens_details.reasoning_tokens when the provider reports it; None otherwise")
     actual_cost_usd: Optional[Decimal] = Field(default=None, description="USD cost, only when the provider's cost unit is verified as USD; never derived")
     estimated_cost_usd: Optional[Decimal] = Field(
         default=None, description="Catalog price x PROVIDER-REPORTED tokens; None unless both token counts were reported"
