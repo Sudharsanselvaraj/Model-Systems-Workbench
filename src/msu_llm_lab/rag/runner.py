@@ -8,7 +8,8 @@ from typing import Dict, List, Optional
 
 from msu_llm_lab.core.budget import BudgetService
 from msu_llm_lab.dataset.manager import DatasetManager
-from msu_llm_lab.providers.base import BaseProvider, ProviderRequest
+from msu_llm_lab.core.live_guard import LiveAuthorization, require_live_authorization
+from msu_llm_lab.providers.base import BaseProvider, ProviderRequest, require_complete_usage
 from msu_llm_lab.providers.openrouter import OpenRouterAdapter
 from msu_llm_lab.rag.evaluator import RAGSystemEvaluator
 from msu_llm_lab.rag.models import RAGBenchmarkReport, RAGCaseEvaluation
@@ -41,8 +42,11 @@ class RAGBenchmarkRunner:
         dataset_path: Path,
         split: Optional[DatasetSplit] = None,
         dry_run: bool = True,
+        live_authorization: Optional[LiveAuthorization] = None,
     ) -> RAGBenchmarkReport:
         """Executes full RAG benchmark over specified dataset split."""
+        if not dry_run:
+            require_live_authorization(live_authorization, model_id)
         run_id = f"rag_run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -59,9 +63,7 @@ class RAGBenchmarkRunner:
             raise ValueError(f"No cases found for evaluation in {dataset_path} (split: {split})")
 
         # 2. Budget Preflight Check (model-specific pricing based on estimated prompt & output tokens)
-        in_price, out_price = Decimal("0.1500"), Decimal("0.6000")
-        if hasattr(self.provider, "_get_pricing_for_model"):
-            in_price, out_price = self.provider._get_pricing_for_model(model_id)
+        in_price, out_price = self.provider._get_pricing_for_model(model_id)
         
         # Estimate ~600 prompt tokens (system + context + query) and ~150 completion tokens per case
         est_cost_per_case = (Decimal("600") * in_price / Decimal("1000000")) + (Decimal("150") * out_price / Decimal("1000000"))
@@ -113,11 +115,13 @@ class RAGBenchmarkRunner:
                 model_id=model_id,
                 messages=prompt_messages,
                 dry_run=dry_run,
+                live_authorized=not dry_run,
                 case_id=case.id,
                 expected_answer=case.expected_answer,
             )
 
             response = self.provider.generate(request)
+            require_complete_usage(response)
 
             # Step 3c: Decoupled Scoring & Failure Attribution
             ans_corr, groundedness = self.evaluator.evaluate_generation(
@@ -185,6 +189,7 @@ class RAGBenchmarkRunner:
                 run_id=run_id,
                 is_pilot=True,
                 is_preflight_estimate=False,
+                is_simulated=dry_run,
             )
             total_cost += response.cost_usd
 
