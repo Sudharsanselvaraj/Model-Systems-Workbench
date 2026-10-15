@@ -212,12 +212,13 @@ def test_cli_budget_status_output():
     assert "local experiment tracking policies" in result.stdout
 
 
-def test_cli_models_list_output():
-    """Verify CLI models list command displays candidates and unverified disclaimer."""
-    result = runner.invoke(app, ["models", "list"], env={"COLUMNS": "180"})
+def test_cli_models_list_shows_the_verified_comparison_roster():
+    """`models list` is the comparison roster: all ten participants with sourced readiness, no legacy planning prices."""
+    result = runner.invoke(app, ["models", "list"], env={"COLUMNS": "260"})
     assert result.exit_code == 0
-    assert "Candidate Portfolio" in result.stdout
-    assert "UNVERIFIED" in result.stdout
-    assert "NOT yet been validated against OpenRouter live API" in result.stdout
-    assert "google/gemini-3.5-flash-lite" in result.stdout
-    assert "qwen/qwen3-8b" in result.stdout
+    assert "Comparison roster (10 participants)" in result.stdout
+    for name in ("Jev 1.14", "GPT-4.1 Nano", "Claude Sonnet 5.5"):
+        assert name in result.stdout
+    assert "gpt-6-luna" not in result.stdout and "qwen3-8b" not in result.stdout
+
+
