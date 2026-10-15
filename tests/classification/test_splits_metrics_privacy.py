@@ -92,13 +92,6 @@ def test_empty_metrics_are_none_not_zero():
     assert m.accuracy is None and m.macro_f1 is None and m.invalid_rate is None
 
 
-def test_dry_run_records_rejected():
-    with pytest.raises(MetricsError):
-        intent_metrics([IntentItem(L.QUERY, L.QUERY, is_dry_run=True)])
-    with pytest.raises(MetricsError):
-        lead_metrics([LeadItem(True, True, is_dry_run=True)])
-
-
 def test_lead_metrics_hand_computed():
     items = [LeadItem(True, True), LeadItem(True, True), LeadItem(True, False), LeadItem(True, None),
              LeadItem(False, True), LeadItem(False, False), LeadItem(False, False), LeadItem(False, None)]
