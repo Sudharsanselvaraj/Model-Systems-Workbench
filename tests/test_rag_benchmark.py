@@ -5,11 +5,13 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
+from live_fakes import ExpectedContextRetriever, LiveFakeProvider
 from msu_llm_lab.cli import app
+from msu_llm_lab.core.live_guard import LiveAuthorization
 from msu_llm_lab.dataset.manager import DatasetManager
 from msu_llm_lab.rag.evaluator import RAGSystemEvaluator
 from msu_llm_lab.rag.models import RetrievalResult
-from msu_llm_lab.rag.retriever import KeywordBM25Retriever, MockRetriever
+from msu_llm_lab.rag.retriever import BaseRetriever, KeywordBM25Retriever
 from msu_llm_lab.rag.runner import RAGBenchmarkRunner
 from msu_llm_lab.schemas.evaluation import (
     DataClassification,
@@ -21,42 +23,6 @@ from msu_llm_lab.schemas.evaluation import (
 from msu_llm_lab.storage.db import DatabaseManager
 
 runner = CliRunner()
-
-
-def test_mock_retriever_modes():
-    """MockRetriever isolates retrieval ceiling, noise sensitivity, and empty starvation."""
-    case = EvaluationCase(
-        id="case-ret-test",
-        query="What is the Bachelor of Computer Science entry requirement?",
-        expected_context="STPM Grade C with credit in Add Math.",
-        expected_retrieval_keywords=["STPM", "Add Math"],
-        classification=DataClassification.SYNTHETIC,
-        split=DatasetSplit.TEST,
-        verification=VerificationRecord(
-            status=VerificationStatus.VERIFIED,
-            reference_source="Guide 2026",
-        ),
-    )
-
-    # Perfect mode
-    ret_perfect = MockRetriever(mode="perfect")
-    res_perf = ret_perfect.retrieve(case)
-    assert res_perf.hit_rate == 1.0
-    assert len(res_perf.chunks) == 1
-    assert "Add Math" in res_perf.chunks[0]
-
-    # Noisy mode
-    ret_noisy = MockRetriever(mode="noisy")
-    res_noisy = ret_noisy.retrieve(case)
-    assert res_noisy.hit_rate == 1.0
-    assert len(res_noisy.chunks) == 2
-    assert res_noisy.precision == 0.50
-
-    # Empty mode
-    ret_empty = MockRetriever(mode="empty")
-    res_empty = ret_empty.retrieve(case)
-    assert res_empty.hit_rate == 0.0
-    assert len(res_empty.chunks) == 0
 
 
 def test_keyword_bm25_retriever():
@@ -152,19 +118,18 @@ def test_rag_evaluator_scoring_and_attribution():
 
 
 def test_rag_benchmark_runner_full_flow(tmp_path: Path):
-    """RAGBenchmarkRunner runs decoupled benchmark, computes metrics, and writes to SQLite."""
-    db_path = tmp_path / "rag_bench_test.db"
-    db_mgr = DatabaseManager(db_path=db_path)
+    """A real (live-shaped) RAG run computes metrics, books spend and writes the run to SQLite. There is no simulated mode."""
+    model = "google/gemini-3.5-flash-lite"
+    db_mgr = DatabaseManager(db_path=tmp_path / "rag_bench_test.db")
     db_mgr.init_db()
-
     dataset_path = Path("data/evaluation/verified_rag_benchmark.jsonl")
-    runner_engine = RAGBenchmarkRunner(db_mgr=db_mgr)
-    report = runner_engine.run(
-        model_id="google/gemini-3.5-flash-lite",
-        dataset_path=dataset_path,
-        split=DatasetSplit.TEST,
-        dry_run=True,
-    )
+
+    with pytest.raises(Exception, match="live authorization"):  # no authorization, no request
+        RAGBenchmarkRunner(retriever=ExpectedContextRetriever(), db_mgr=db_mgr, provider=LiveFakeProvider()).run(
+            model_id=model, dataset_path=dataset_path, split=DatasetSplit.TEST)
+
+    report = RAGBenchmarkRunner(retriever=ExpectedContextRetriever(), db_mgr=db_mgr, provider=LiveFakeProvider.echoing_expected(dataset_path)).run(
+        model_id=model, dataset_path=dataset_path, split=DatasetSplit.TEST, live_authorization=LiveAuthorization(models=(model,)))
 
     assert report.total_cases == 8
     assert report.mean_retrieval_hit_rate == 1.0
@@ -172,12 +137,10 @@ def test_rag_benchmark_runner_full_flow(tmp_path: Path):
     assert report.mean_answer_correctness > 0.50
     assert report.mean_e2e_latency_ms > report.mean_retrieval_latency_ms
     assert len(report.case_results) == 8
-    assert report.total_cost_usd >= Decimal("0.0000")
-
-    # Verify run persisted to database
+    assert report.total_cost_usd == Decimal("0.0008")
     saved_run = db_mgr.get_evaluation_run(report.run_id)
-    assert saved_run is not None
-    assert saved_run["completed_cases"] == 8
+    assert saved_run is not None and saved_run["completed_cases"] == 8 and not saved_run["is_dry_run"]
+    assert len(db_mgr.get_recent_transactions()) == 8 and db_mgr.get_cumulative_spend()[1] == Decimal("0.000800")
     assert report.verified_cases_count == 3
     assert report.unresolved_cases_count == 5
 
@@ -194,6 +157,7 @@ def test_grounded_retrieval_metrics_hand_calculated(tmp_path: Path):
         expected_answer="Answer 1",
         relevant_record_ids=["REC-A"],
         source_status="SOURCE_VERIFIED",
+        classification=DataClassification.SYNTHETIC,
     )
     case_2 = EvaluationCase(
         id="c2",
@@ -201,10 +165,11 @@ def test_grounded_retrieval_metrics_hand_calculated(tmp_path: Path):
         expected_answer="Answer 2",
         relevant_record_ids=["REC-B", "REC-C"],
         source_status="SOURCE_VERIFIED",
+        classification=DataClassification.SYNTHETIC,
     )
 
     # Custom mock retriever with controlled record IDs
-    class ControlledRetriever(MockRetriever):
+    class ControlledRetriever(BaseRetriever):
         def retrieve(self, case, top_k=2):
             if case.id == "c1":
                 # Hits REC-A at rank 2
@@ -221,13 +186,13 @@ def test_grounded_retrieval_metrics_hand_calculated(tmp_path: Path):
                     retrieved_record_ids=["REC-B", "REC-Z"],
                 )
 
-    runner_engine = RAGBenchmarkRunner(db_mgr=db_mgr, retriever=ControlledRetriever(), top_k=2)
+    runner_engine = RAGBenchmarkRunner(db_mgr=db_mgr, retriever=ControlledRetriever(), top_k=2, provider=LiveFakeProvider())
     dataset_file = tmp_path / "test_hand_cases.jsonl"
     with open(dataset_file, "w") as f:
         f.write(case_1.model_dump_json() + "\n")
         f.write(case_2.model_dump_json() + "\n")
 
-    report = runner_engine.run(model_id="google/gemini-3.5-flash-lite", dataset_path=dataset_file, dry_run=True)
+    report = runner_engine.run(model_id="google/gemini-3.5-flash-lite", dataset_path=dataset_file, live_authorization=LiveAuthorization(models=("google/gemini-3.5-flash-lite",)))
 
     # Hand calculation:
     # Case 1: rel={"REC-A"}, ret=["REC-X", "REC-A"] (top-2)
@@ -257,6 +222,7 @@ def test_unresolved_abstention_exclusion_from_retrieval_denominator(tmp_path: Pa
         expected_answer="Known answer",
         relevant_record_ids=["REC-FOUND"],
         source_status="SOURCE_VERIFIED",
+        classification=DataClassification.SYNTHETIC,
     )
     case_unresolved = EvaluationCase(
         id="c-unres",
@@ -264,10 +230,11 @@ def test_unresolved_abstention_exclusion_from_retrieval_denominator(tmp_path: Pa
         expected_answer="KB does not contain details. Consult admissions.",
         relevant_record_ids=[],
         source_status="UNRESOLVED",
+        classification=DataClassification.SYNTHETIC,
         abstention_expected=True,
     )
 
-    class SingleHitRetriever(MockRetriever):
+    class SingleHitRetriever(BaseRetriever):
         def retrieve(self, case, top_k=2):
             return RetrievalResult(
                 chunks=["Some text"],
@@ -275,13 +242,14 @@ def test_unresolved_abstention_exclusion_from_retrieval_denominator(tmp_path: Pa
                 retrieved_record_ids=["REC-FOUND"],
             )
 
-    runner_engine = RAGBenchmarkRunner(db_mgr=db_mgr, retriever=SingleHitRetriever(), top_k=2)
+    runner_engine = RAGBenchmarkRunner(db_mgr=db_mgr, retriever=SingleHitRetriever(), top_k=2,
+                                     provider=LiveFakeProvider({"c-ver": "Known answer", "c-unres": "KB does not contain details. Consult admissions."}))
     dataset_file = tmp_path / "test_abstain_cases.jsonl"
     with open(dataset_file, "w") as f:
         f.write(case_verified.model_dump_json() + "\n")
         f.write(case_unresolved.model_dump_json() + "\n")
 
-    report = runner_engine.run(model_id="google/gemini-3.5-flash-lite", dataset_path=dataset_file, dry_run=True)
+    report = runner_engine.run(model_id="google/gemini-3.5-flash-lite", dataset_path=dataset_file, live_authorization=LiveAuthorization(models=("google/gemini-3.5-flash-lite",)))
 
     # Only 1 verified case, which succeeded -> Recall = 1.0, MRR = 1.0
     assert report.verified_cases_count == 1
@@ -292,14 +260,17 @@ def test_unresolved_abstention_exclusion_from_retrieval_denominator(tmp_path: Pa
     assert report.abstention_accuracy == 1.0
 
 
-def test_cli_benchmark_rag():
-    """CLI benchmark-rag command executes successfully with summary and breakdown."""
-    result = runner.invoke(
-        app,
-        ["benchmark-rag", "--model", "google/gemini-3.5-flash-lite", "--split", "TEST", "--dry-run"],
-    )
-    assert result.exit_code == 0
-    assert "Decoupled RAG Performance Summary" in result.output
-    assert "Failure Attribution Analysis" in result.output
-    assert "Verified Ground Truth Cases" in result.output
-    assert "Source Recall@k" in result.output
+def test_cli_benchmark_rag_never_simulates_and_sends_nothing_without_live(monkeypatch, tmp_path):
+    """Without --live the command only explains itself; without audited KB records it refuses (no evaluation-passage fallback)."""
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("network touched"))
+    dataset = Path(__file__).resolve().parents[1] / "data" / "evaluation" / "verified_rag_benchmark.jsonl"
+    monkeypatch.chdir(tmp_path)  # no data/audit here
+    missing = runner.invoke(app, ["benchmark-rag", "--dataset", str(dataset), "--live"])
+    assert missing.exit_code == 1 and "Audited knowledge-base records not found" in missing.output
+    for flag in ("--dry-run", "--retriever"):  # the simulated options no longer exist
+        assert runner.invoke(app, ["benchmark-rag", flag]).exit_code == 2
+    (tmp_path / "data" / "audit").mkdir(parents=True)
+    (tmp_path / "data" / "audit" / "parsed_records_general_kb.jsonl").write_text("")
+    plain = runner.invoke(app, ["benchmark-rag", "--dataset", str(dataset)])
+    assert plain.exit_code in (1, 2)  # 2 = explained and sent nothing; 1 = the (empty) index could not be built
