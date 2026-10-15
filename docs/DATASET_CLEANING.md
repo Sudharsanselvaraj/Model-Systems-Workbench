@@ -132,3 +132,10 @@ These changes apply to the code and to any NEW preparation run. The existing `pr
 - **Pseudonymisation is not anonymisation.** Group and trace ids are salted hashes. `prep-v1` used a PUBLIC constant salt, so anyone holding the export can re-link them. A new version can use a private secret by setting `MSU_PREP_SALT` in the shell before running. The salt is never written to any file; only a short `salt_id` is recorded. **Migration:** changing the salt changes every group id and therefore the group-level splits, so a protected version is a new dataset; annotations must be migrated by row id. Existing ids were not rotated.
 - **Limitations are visible everywhere.** Every derived record now carries `privacy_notice` (`REDACTION_INCOMPLETE_NO_NER;PSEUDONYMS_ARE_NOT_ANONYMOUS;LOCAL_ONLY`), and the README and manifest say so.
 - **Views are unvalidated.** The challenge view is a candidate pool chosen by phrase hints before any label review, and the natural view is not validated as representative. Candidates and split assignments carry `view_status: HEURISTIC_UNVALIDATED`, and the manifest explains both.
+
+## 10. Second hardening pass (before the authorized real-data benchmark)
+
+- The version recorded in every artifact and manifest is the output folder name (`prep-v2`, `prep-v1-r2`), so a new preparation is never confused with `prep-v1`.
+- `prepare-classification-data` refuses the public legacy salt unless `--allow-public-salt` is given; `--prompt-salt` asks for the private secret with hidden input (twice, at least 12 characters) and keeps it only in the process environment.
+- Redaction additionally covers passport-style numbers, capitalised names after "I am / this is / saya", and names given after "my father's / mother's / son's name". Ordinary phrases such as "I am interested" are left alone. Still pattern-based; no named-entity recognition; pseudonymization is not anonymization.
+- A real-data plan is blocked for any dataset prepared with the public salt or without the code fingerprint.
