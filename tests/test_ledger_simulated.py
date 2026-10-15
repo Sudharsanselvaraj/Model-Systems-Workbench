@@ -97,9 +97,10 @@ def test_budget_status_cli_still_labels_legacy_simulated_rows(tmp_path, monkeypa
     monkeypatch.chdir(tmp_path)
     b = BudgetService()
     b.record_spend("s1", MODEL, "openrouter", Decimal("0.001"), "Evaluation case x (dry_run=True)", run_id="r", is_simulated=True)
-    b.record_spend("a1", MODEL, "openrouter", Decimal("0.002"), "real-looking actual", run_id="r2")
+    b.record_spend("a1", MODEL, "openrouter", Decimal("0.002"), "provider-reported actual", run_id="r2", cost_basis="PROVIDER_REPORTED")
+    b.record_spend("e1", MODEL, "openrouter", Decimal("0.003"), "estimated from catalogue", run_id="r2", cost_basis="ESTIMATED_FROM_CATALOG")
     r = CliRunner(env={"COLUMNS": "250"}).invoke(app, ["budget", "status"])
-    assert r.exit_code == 0 and "SIMULATED" in r.output and "ACTUAL" in r.output
+    assert r.exit_code == 0 and "SIMULATED" in r.output and "ACTUAL" in r.output and "ESTIMATED" in r.output   # the type column follows the cost basis, not a blanket "ACTUAL"
     assert "Legacy simulated entries (never counted against any ceiling): $0.001000" in r.output
 
 
