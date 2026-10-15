@@ -26,6 +26,8 @@ class BudgetStatus(BaseModel):
     per_run_ceiling_usd: Decimal
     per_case_ceiling_usd: Decimal
     
+    unresolved_spend_count: int = 0                   # billed-or-not requests with unknown cost; live runs are blocked while > 0
+    spend_by_basis: Dict[str, Decimal] = Field(default_factory=dict)
     simulated_spend_usd: Decimal = Decimal("0")  # dry-run simulations; shown for transparency, never counted against a ceiling
 
     is_pilot_exhausted: bool
@@ -47,6 +49,8 @@ class BudgetService:
         _, total_spend = self.db.get_cumulative_spend(include_estimates=False)
         _, pilot_spend = self.db.get_pilot_spend(include_estimates=False)
         _, simulated = self.db.get_simulated_spend()
+        unresolved = len(self.db.get_unresolved())
+        by_basis = self.db.get_spend_by_basis()
 
         rem_total = max(Decimal("0.00"), self.policy.total_budget_usd - total_spend)
         rem_pilot = max(Decimal("0.00"), self.policy.pilot_budget_usd - pilot_spend)
@@ -58,6 +62,8 @@ class BudgetService:
             pilot_ceiling_usd=self.policy.pilot_budget_usd,
             pilot_spend_usd=pilot_spend,
             simulated_spend_usd=simulated,
+            unresolved_spend_count=unresolved,
+            spend_by_basis=by_basis,
             remaining_pilot_usd=rem_pilot,
             per_run_ceiling_usd=self.policy.per_run_ceiling_usd,
             per_case_ceiling_usd=self.policy.per_case_ceiling_usd,
@@ -80,6 +86,11 @@ class BudgetService:
 
         if projected_spend_usd < Decimal("0.00"):
             return False, "Projected spend cannot be negative."
+
+        pending = self.db.get_unresolved()
+        if pending:
+            return False, (f"{len(pending)} request(s) have unresolved spend (cost unknown). Reconcile them with "
+                           "`msu-llm-lab budget reconcile` before any further live run.")
 
         if projected_spend_usd > self.policy.per_run_ceiling_usd:
             return (
@@ -126,6 +137,7 @@ class BudgetService:
         is_pilot: bool = True,
         is_preflight_estimate: bool = False,
         is_simulated: bool = False,
+        cost_basis: str = "UNSPECIFIED",
     ) -> None:
         """Commits an actual, estimated or simulated (dry-run) transaction. Simulated entries never count against ceilings."""
         self.db.init_db()
@@ -139,6 +151,7 @@ class BudgetService:
             is_pilot=is_pilot,
             is_preflight_estimate=is_preflight_estimate,
             is_simulated=is_simulated,
+            cost_basis=cost_basis,
         )
 
     def calculate_case_cost(
@@ -152,3 +165,18 @@ class BudgetService:
         in_cost = (Decimal(prompt_tokens) / Decimal("1000000")) * input_price_per_1m_usd
         out_cost = (Decimal(completion_tokens) / Decimal("1000000")) * output_price_per_1m_usd
         return in_cost + out_cost
+
+
+    def record_unresolved_spend(self, transaction_id: str, model_id: str, provider: str, description: str, run_id: Optional[str] = None) -> None:
+        """Record that a request may have been billed but no cost could be established. No amount is invented (it is stored as 0 and
+        flagged); live runs stay blocked until the entry is reconciled with a real amount."""
+        self.db.init_db()
+        self.db.record_transaction(
+            transaction_id=transaction_id, model_id=model_id, provider=provider, amount_usd=Decimal("0"),
+            description=f"UNRESOLVED SPEND: {description}", run_id=run_id, is_pilot=True, is_preflight_estimate=False,
+            is_unresolved=True, cost_basis="UNRESOLVED",
+        )
+
+    def unresolved(self):
+        self.db.init_db()
+        return self.db.get_unresolved()
