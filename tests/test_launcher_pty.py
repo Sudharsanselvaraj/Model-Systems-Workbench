@@ -84,3 +84,28 @@ def test_short_terminals_get_a_compact_frame_instead_of_scrolling():
     frames = re.split(r"\x1b\[H", text)[1:]
     assert frames and all(f.split("\x1b[?25h")[0].count("\x1b[K\n") + 1 <= 20 for f in frames)
     assert "Select a workbench workflow" in re.sub(r"\x1b\[[0-9;?]*[A-Za-z]", "", text)
+
+
+ENTER = b"\r"
+
+
+def plain(text):
+    return re.sub(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07", "", text)
+
+
+def test_a_workflow_returns_to_the_menu_instead_of_exiting_and_never_crashes():
+    # 3 = dataset status, Enter returns to the menu, 5 = API preflight, Enter returns, q leaves
+    text, code = run_launcher([b"3", ENTER, b"5", ENTER, QUIT], settle=1.2)
+    p = plain(text)
+    assert code == 0 and "Traceback" not in p and "AttributeError" not in p and "OptionInfo" not in p
+    assert text.count("\x1b[?1049h") == 3 and text.count("\x1b[?1049l") == 3          # menu, menu again, menu again: it came back each time
+    assert p.count("Press Enter to return to the menu") == 2
+    assert "expected labels: ALL NULL" in p or "No prepared classification dataset" in p
+    assert "API preflight" in p and "Exiting MSU LLM Workbench" in p
+
+
+def test_every_menu_workflow_runs_without_a_traceback():
+    for key in (b"2", b"4", b"6", b"7", b"8"):
+        text, code = run_launcher([key, ENTER, QUIT], settle=1.5)
+        p = plain(text)
+        assert code == 0 and "Traceback" not in p and "Command failed" not in p, (key, p[-400:])
