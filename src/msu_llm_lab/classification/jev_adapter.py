@@ -101,6 +101,7 @@ def parse_decisions_response(
     # --- usage
     p_tok = c_tok = None
     actual: Optional[Decimal] = None
+    native: Optional[Decimal] = None
     usage = data.get("usage")
     if usage is None:
         warnings.append("USAGE_MISSING")
@@ -113,7 +114,8 @@ def parse_decisions_response(
         p_tok, c_tok = _count(usage.get("input_tokens")), _count(usage.get("output_tokens"))
         if "cost" in usage:
             if _num(usage["cost"]) and usage["cost"] >= 0:
-                actual = Decimal(str(usage["cost"]))
+                native = Decimal(str(usage["cost"]))
+                actual = native if registry.provider_cost_is_usd() else None  # credits are not booked as USD until the unit is verified
             else:
                 issues.append("USAGE_COST_MALFORMED")
         else:
@@ -132,6 +134,7 @@ def parse_decisions_response(
 
     telemetry = dict(
         resolved_model_id=resolved, serving_provider=provider, prompt_tokens=p_tok, completion_tokens=c_tok, usage_source=usage_source,
+        native_cost=native, native_cost_unit=registry.NATIVE_COST_UNIT_LABEL if native is not None else None,
         actual_cost_usd=actual, estimated_cost_usd=estimated, cost_usd=cost, cost_basis=basis, warnings=warnings,
     )
 
