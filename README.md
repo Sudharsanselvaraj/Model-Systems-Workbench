@@ -1,6 +1,6 @@
 <div align="center">
 
-<img src="assets/Lavender%20Branching%20Tech%20Panels.png" alt="MSU LLM Workbench logo" width="200" />
+<img src="assets/readme/launcher_banner.png" alt="MSU LLM Workbench: the local-first research laboratory for university admissions AI evaluation" width="900" />
 
 # MSU LLM Workbench
 
@@ -20,6 +20,7 @@ A local-first research workbench for auditing admissions knowledge bases, prepar
   <a href="#why-this-exists"><b>Why</b></a> ·
   <a href="#commands"><b>Commands</b></a> ·
   <a href="#safety-model"><b>Safety</b></a> ·
+  <a href="#terminal-gallery"><b>Gallery</b></a> ·
   <a href="#comparison-roster"><b>Roster</b></a> ·
   <a href="#development"><b>Development</b></a> ·
   <a href="docs/ARCHITECTURE.md"><b>Docs</b></a>
@@ -28,7 +29,7 @@ A local-first research workbench for auditing admissions knowledge bases, prepar
 </div>
 
 > [!NOTE]
-> **Alpha.** The workbench contains no simulated or mock mode: every model response it records came from a provider, and a request is only ever sent after you type approval of the exact plan. No live request has been made yet. **Production parity is not established** (the Dify workflow export is missing), and no provider data policy is verified, so student-derived data may not be sent to any provider.
+> **Alpha.** The workbench contains no simulated or mock mode: every model response it records came from a provider, and a request is only ever sent after you type approval of the exact plan. A first sampled real-data benchmark has been run under typed operator authorization (17 of 222 blocks, 11 participants; see [the benchmark gallery](#benchmark-gallery)); ground truth is still pending, so no accuracy is reported. **Production parity is not established** (the Dify workflow export is missing), and no provider data policy is verified, so student-derived data may not be sent to any provider.
 
 <p align="center">
   <img src="assets/readme/welcome_header.png" alt="Workbench launcher" width="900" />
@@ -109,6 +110,71 @@ A read-only experimental dashboard: execution state and spend by kind (ACTUAL, E
 | `q` | Quit and restore the terminal |
 
 The dashboard cannot start a live run; those go through the CLI with typed approval. Optional: `pip install "msu-llm-lab[monitor]"` adds `psutil` for true CPU and memory readings.
+
+---
+
+## Terminal gallery
+
+Rendered from the real dashboard and local telemetry (aggregates only: no conversation text, no case content).
+
+<p align="center">
+  <img src="assets/readme/tui_overview.svg" alt="Dashboard overview: execution state, spend, system resources" width="900" /><br/>
+  <sub>Overview: execution state, spend by kind, system resources and the experimental categories.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/tui_roster.svg" alt="Comparison roster" width="900" /><br/>
+  <sub>Comparison roster: readiness, pinned routes and blockers for all participants.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/tui_latency.svg" alt="Live latency and cost" width="900" /><br/>
+  <sub>Live latency and cost, drawn only from recorded request events.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/tui_agreement.svg" alt="Model agreement" width="900" /><br/>
+  <sub>Model agreement. Agreement is not accuracy.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/tui_quality.svg" alt="Classification quality, ground truth pending" width="900" /><br/>
+  <sub>Classification quality stays <code>GROUND TRUTH PENDING</code> until human-approved labels exist.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/tui_budget.svg" alt="Budget and spend by kind" width="900" /><br/>
+  <sub>Budget: ACTUAL, ESTIMATED and UNRESOLVED spend are never mixed.</sub>
+</p>
+
+## Benchmark gallery
+
+Figures from the offline evaluation report (`uv run msu-llm-lab evaluation-report`): a sampled operational benchmark of 11 participants, 3,263 records, 17 of 222 blocks. Valid-output rate is reliability, not correctness; costs are estimates; accuracy is not computable until labels are approved.
+
+<p align="center">
+  <img src="assets/readme/bench_request_flow.png" alt="Request flow reconciliation" width="720" /><br/>
+  <sub>Every request accounted for: 3,400 = 540 carried over + 2,860 planned = 2,723 dispatched + 137 unattempted.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/bench_block_heatmap_valid.png" alt="Valid-output rate by block and participant" width="720" /><br/>
+  <sub>Valid-output rate per block and participant.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/bench_pareto_intent.png" alt="INTENT cost-latency view" width="720" /><br/>
+  <sub>Operational cost-latency view for Main Intent (no accuracy axis).</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/bench_latency_percentiles.png" alt="Latency percentiles" width="720" /><br/>
+  <sub>End-to-end latency percentiles (client-side).</sub>
+</p>
+
+<p align="center">
+  <img src="assets/readme/bench_agreement_heatmap_intent.png" alt="Pairwise agreement" width="560" /><br/>
+  <sub>Pairwise agreement on common valid cases.</sub>
+</p>
 
 ---
 
