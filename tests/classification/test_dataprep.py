@@ -202,7 +202,7 @@ def test_o1_bare_reply_to_an_offer_is_excluded_with_its_rule_reference(prepared)
     by = {c["candidate"]["row_id"]: c for c in lines(out / "intent_candidates_30m.jsonl")}
     # R0008 is the assistant 'Yes.'; R0009's query 'no' replies to an assistant answer that is not an offer, so it is not O1
     assert by["R0009"]["candidate"]["candidate_status"] != "EXCLUDED"
-    assert dp._is_o1("no", "Would you like fee details?") and dp._is_o1("Thanks", "Anything else? Let me know.")
+    assert dp._is_o1("no", "Would you like fee details?") and dp._is_o1("Thanks", "Do you want the entry requirements as well?")
     assert not dp._is_o1("no thanks", "Would you like fee details?") and not dp._is_o1("no", "The fee is RM 20,000.") and not dp._is_o1("no", None)
 
 
