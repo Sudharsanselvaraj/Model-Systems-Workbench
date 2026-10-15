@@ -697,7 +697,7 @@ def test_budget_panel_row_navigation_and_inspection():
     app_tui.handle_key("DOWN")
     assert app_tui.content_cursor == 3
     app_tui.handle_key("ENTER")
-    assert "Live Inference" in app_tui.feedback_message
+    assert "Live inference" in app_tui.feedback_message
 
     # Left arrow returns focus to NAV sidebar
     app_tui.handle_key("LEFT")
@@ -808,6 +808,9 @@ def test_build_traces_main_panel_rendering():
 
 def test_tui_evaluation_runs_navigation_and_inspection():
     """Verify Up/Down arrow keys and Enter inspect runs on Evaluation Runs screen (nav 3)."""
+    from live_fakes import seed_runs
+    from msu_llm_lab.storage.db import DatabaseManager
+    seed_runs(DatabaseManager())  # two recorded runs in the isolated test database
     app_tui = WorkbenchTUI()
     app_tui.refresh_data()
 
@@ -874,8 +877,10 @@ def test_welcome_screen_render():
     assert "Spend: $" in output and "cap" in output
     assert "Tests: 95 passed" not in output  # no hard-coded claims; every figure is read live or shown as n/a
     assert "Launch Full-Screen TUI Dashboard" in output
-    assert "Run Decoupled RAG Benchmark" in output
-    assert "Simulate vLLM Serving & Hardware Sizing" in output
+    for item in ("Classification Dataset Status", "Model Comparison Roster", "API Preflight", "Smoke-Test Plan", "Inspect Budget"):
+        assert item in output
+    for gone in ("Decoupled RAG Benchmark", "Simulate vLLM", "Diagnose Production Traces"):
+        assert gone not in output  # the launcher offers real workflows only
     assert "msu-llm-lab >" in output
 
 
