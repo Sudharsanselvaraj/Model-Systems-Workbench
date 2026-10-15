@@ -10,11 +10,13 @@ import csv
 import hashlib
 import json
 import math
+import os
 import re
+import subprocess
 import unicodedata
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
@@ -26,7 +28,27 @@ from msu_llm_lab.classification.splits import assert_no_user4, assign_group_spli
 from msu_llm_lab.schemas.evaluation import DataClassification, DatasetSplit
 
 PREP_VERSION = "prep-v1"
-SALT = "msu-llm-lab/prep-v1"
+SALT = "msu-llm-lab/prep-v1"          # LEGACY PUBLIC constant: pseudonyms made with it are linkable, not anonymous
+SALT_ENV = "MSU_PREP_SALT"             # set this to a private secret to derive protected pseudonyms for a NEW preparation version
+PRIVACY_NOTICE = "REDACTION_INCOMPLETE_NO_NER;PSEUDONYMS_ARE_NOT_ANONYMOUS;LOCAL_ONLY"
+VIEW_STATUS = "HEURISTIC_UNVALIDATED"
+VIEW_SEMANTICS = {
+    "CHALLENGE": "A candidate pool chosen by phrase hints BEFORE any label review. It is not a validated rare-class set until reviewed labels confirm class coverage.",
+    "NATURAL": "The remaining groups. It is NOT validated as representative of production traffic: it under-represents the hint groups moved to the challenge view, "
+               "and its label distribution is unknown until labels are approved.",
+}
+
+
+class PrepOverwriteError(RuntimeError):
+    """Refusal to write into an existing preparation directory (it may hold reviewed annotations or earlier candidates)."""
+
+
+def _salt() -> Tuple[str, str, bool]:
+    """(salt, salt_id, protected). A private salt from the environment is used when present; otherwise the legacy public constant."""
+    secret = os.environ.get(SALT_ENV, "").strip()
+    if secret:
+        return secret, "secret-" + hashlib.sha256(secret.encode("utf-8")).hexdigest()[:8], True
+    return SALT, "public-legacy-v1", False
 SEED = "msu-prep-v1-seed"
 EXPECTED_COLUMNS = ["traceId", "time", "user4", "user_hash", "conversation_id", "turn", "query", "answer"]
 POLICIES = {"30m": 1800, "2h": 7200}
@@ -68,7 +90,7 @@ def redact(text: str) -> Tuple[str, Counter]:
 
 
 def _h(value: str, n: int = 10) -> str:
-    return hashlib.sha256(f"{SALT}|{value}".encode("utf-8")).hexdigest()[:n]
+    return hashlib.sha256(f"{_salt()[0]}|{value}".encode("utf-8")).hexdigest()[:n]
 
 
 def _norm(text: str) -> str:
@@ -276,7 +298,7 @@ def review_sample(rows: List[Row], a: SessionPolicy, b: SessionPolicy, n_groups:
                 chosen.append((g, cat))
     out = []
     for g, cat in chosen:
-        out.append({"group_id": g, "selected_because": cat, "rows": [{
+        out.append({"group_id": g, "selected_because": cat, "privacy_notice": PRIVACY_NOTICE, "rows": [{
             "row_id": r.row_id, "time": r.ts.isoformat(), "gap_s": a.gap_before[r.row_id], "turn": r.turn,
             "session_30m": a.session_of[r.row_id][-6:], "session_2h": b.session_of[r.row_id][-6:], "boundary_30m": a.boundary[r.row_id],
             "boundary_2h": b.boundary[r.row_id], "turn_evidence_2h": b.turn_evidence[r.row_id], "flags": r.flags,
@@ -291,7 +313,10 @@ _HINTS = {
     "UPLOAD_STATUS_PHRASE": re.compile(r"(?=.*\b(?:uploaded|submitted|sent|attached|hantar|muat\s+naik)\b)(?=.*\b(?:check|received|receive|status|confirm|sampai|terima)\b)", re.I | re.S),
     "OUT_OF_SCOPE_PHRASE": re.compile(r"\b(?:ignore\s+(?:all|your|previous)|system\s+prompt|jailbreak|joke|pretend|you\s+are\s+now)\b", re.I),
 }
-_OFFER = re.compile(r"\?\s*$|\bwould you like\b|\bdo you want\b|\bshall i\b|\bwant me to\b|\blet me know\b", re.I)
+# An OFFER proposes something the assistant can do ("would you like...", "shall I..."). A bare trailing question mark does not make an offer:
+# an ordinary clarifying question ("Which campus do you mean?") is not the O1 case. Counsellor-connect offers follow Step 2, not O1.
+_OFFER = re.compile(r"\bwould you like\b|\bdo you want\b|\bshall i\b|\bwant me to\b|\bare you interested\b|\bif you(?:'d| would) like\b|\bcan i (?:help|assist|provide|share|send)\b", re.I)
+_COUNSELLOR_OFFER = re.compile(r"\bconnect (?:you|me)\b.*\b(?:counsel+or|advis[eo]r|staff|human)\b|\b(?:counsel+or|advis[eo]r)\b.*\b(?:call|contact|reach|speak)\b", re.I | re.S)
 _O1_TOKENS = {"no", "nope", "nah", "thanks", "thank you", "thx", "tq", "terima kasih"}
 
 
@@ -300,8 +325,10 @@ def selection_hints(text: str) -> List[str]:
 
 
 def _is_o1(current: str, prev_answer: Optional[str]) -> bool:
-    """Unresolved Intent O1: a bare 'no'/'thanks' replying to an offer or question from the assistant."""
-    return bool(prev_answer) and _norm_loose(current) in _O1_TOKENS and bool(_OFFER.search(prev_answer or ""))
+    """Unresolved Intent O1: a bare 'no'/'thanks' replying to a NON-counsellor offer from the assistant (not any assistant question)."""
+    if not prev_answer or _norm_loose(current) not in _O1_TOKENS:
+        return False
+    return bool(_OFFER.search(prev_answer)) and not _COUNSELLOR_OFFER.search(prev_answer)
 
 
 # ------------------------------------------------------------------ case construction
@@ -358,6 +385,7 @@ def build_intent_candidates(rows: List[Row], pol: SessionPolicy, group_view: Dic
                 "suggested_intent": None, "expected_intent": None, "review_status": "NOT_REVIEWED",
                 "selection_hints": selection_hints(cur.query), "view": gv["view"], "split": gv["split"],
                 "parity_status": PARITY_STATUS, "prep_version": PREP_VERSION, "assistant_text_provenance": "AS_EXPORTED_NOT_A_PREDICTION",
+                "view_status": VIEW_STATUS, "privacy_notice": PRIVACY_NOTICE,
             }})
     return out
 
@@ -400,7 +428,7 @@ def build_lead_candidates(rows: List[Row], pol: SessionPolicy, group_view: Dict[
             "ambiguity_count": len(lc.ambiguities), "later_session_for_group": later_session,
             "expected_need_cta": None, "suggested_need_cta": None, "review_status": "NOT_REVIEWED",
             "view": group_view[g]["view"], "split": group_view[g]["split"], "parity_status": PARITY_STATUS, "prep_version": PREP_VERSION,
-            "summary_provenance": "OFFLINE_RULE_BUILDER_NOT_PRODUCTION",
+            "view_status": VIEW_STATUS, "privacy_notice": PRIVACY_NOTICE, "summary_provenance": "OFFLINE_RULE_BUILDER_NOT_PRODUCTION",
         }})
     return out
 
@@ -467,9 +495,43 @@ def _write_jsonl(path: Path, records: Iterable[Dict[str, Any]]) -> int:
     return n
 
 
+def code_fingerprint() -> str:
+    """Hash of the code that defines the preparation, so every artifact set says which logic made it."""
+    h = hashlib.sha256()
+    here = Path(__file__).parent
+    for name in ("dataprep.py", "lead_summary.py", "contracts.py", "splits.py"):
+        h.update((here / name).read_bytes())
+    return h.hexdigest()[:16]
+
+
+def _git_commit() -> Optional[str]:
+    try:
+        r = subprocess.run(["git", "rev-parse", "--short", "HEAD"], capture_output=True, text=True, timeout=2, cwd=Path(__file__).parent)
+        return r.stdout.strip() or None if r.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def next_free_version_dir(base: Path) -> Path:
+    """`prep-v1` -> `prep-v1-r2`, `prep-v1-r3`, ... the first directory that does not exist yet."""
+    base = Path(base)
+    if not base.exists() or not any(base.iterdir()):
+        return base
+    n = 2
+    while (base.parent / f"{base.name}-r{n}").exists():
+        n += 1
+    return base.parent / f"{base.name}-r{n}"
+
+
 def prepare(source: Path, out_dir: Path) -> Dict[str, Any]:
     """Run the whole local pipeline and write artifacts. Returns the manifest (aggregates only)."""
     source, out_dir = Path(source), Path(out_dir)
+    if out_dir.exists() and any(out_dir.iterdir()):
+        hint = " It contains human annotations, which a rerun must never touch." if (out_dir / "annotations").exists() else ""
+        raise PrepOverwriteError(
+            f"Refusing to write into the non-empty preparation directory {out_dir}.{hint} Prepare into a new directory "
+            "(for example `--new-version`); existing candidates and any reviewed labels are left untouched."
+        )
     sha_before = file_sha256(source)
     rows, redaction_stats = load_rows(source)
     dup_counts = mark_duplicates(rows)
@@ -487,16 +549,17 @@ def prepare(source: Path, out_dir: Path) -> Dict[str, Any]:
         "exact_duplicate_of": r.exact_dup_of, "near_duplicate_of": r.near_dup_of,
         "session_30m": pol_a.session_of[r.row_id], "session_2h": pol_b.session_of[r.row_id],
         "boundary_30m": pol_a.boundary[r.row_id], "boundary_2h": pol_b.boundary[r.row_id], "parity_status": PARITY_STATUS,
+        "privacy_notice": PRIVACY_NOTICE,
     } for r in rows]
     assert_no_user4(cleaned[0].keys())
     _write_jsonl(out_dir / "cleaned_rows.jsonl", cleaned)
 
     for pol in (pol_a, pol_b):
         _write_jsonl(out_dir / f"sessions_{pol.name}.jsonl", ({"session_id": sid, "n_rows": len(r), "row_ids": r, "policy": pol.name,
-                                                               "gap_seconds": pol.gap_seconds, "provisional": True, "parity_status": PARITY_STATUS}
+                                                               "gap_seconds": pol.gap_seconds, "provisional": True, "parity_status": PARITY_STATUS, "privacy_notice": PRIVACY_NOTICE}
                                                               for sid, r in pol.sessions.items()))
     _write_jsonl(out_dir / "session_review_sample.jsonl", review_sample(rows, pol_a, pol_b))
-    _write_jsonl(out_dir / "split_assignments.jsonl", ({"group_id": g, **v} for g, v in sorted(group_view.items())))
+    _write_jsonl(out_dir / "split_assignments.jsonl", ({"group_id": g, **v, "view_status": VIEW_STATUS, "privacy_notice": PRIVACY_NOTICE} for g, v in sorted(group_view.items())))
 
     cand: Dict[str, List[Dict[str, Any]]] = {}
     for pol in (pol_a, pol_b):
@@ -518,8 +581,22 @@ def prepare(source: Path, out_dir: Path) -> Dict[str, Any]:
 
     sha_after = file_sha256(source)
     all_flags = Counter(f for r in rows for f in r.flags)
+    _, salt_id, protected = _salt()
     manifest = {
         "prep_version": PREP_VERSION, "parity_status": PARITY_STATUS, "provisional_session_policy": True,
+        "privacy_notice": PRIVACY_NOTICE,
+        "run": {"created_utc": datetime.now(timezone.utc).isoformat(), "code_fingerprint": code_fingerprint(), "git_commit": _git_commit(),
+                "config": {"session_policies_seconds": POLICIES, "seed": SEED, "split_ratios": {k.value: v for k, v in SPLIT_RATIOS.items()},
+                           "challenge_fraction": CHALLENGE_FRACTION, "short_reply_tokens": SHORT_REPLY_TOKENS}},
+        "pseudonymization": {
+            "salt_id": salt_id, "protected_secret_used": protected,
+            "limitation": ("Group and trace identifiers are salted hashes, not anonymisation. " +
+                           ("A private salt was used." if protected else "The PUBLIC legacy salt was used, so anyone with the source export can re-link them. "
+                                                                         f"Set {SALT_ENV} to a private secret for a new preparation version.")),
+            "migration": "Row ids (R0001...) are file-order keys and stay stable. Group ids and the group-level splits change when the salt changes, so "
+                         "annotations must be keyed by row id and migrated by row id, never by group id.",
+        },
+        "view_semantics": VIEW_SEMANTICS,
         "source": {"file": source.name, "sha256": sha_before, "unchanged_after_run": sha_before == sha_after, "rows": len(rows),
                    "columns_read": [c for c in EXPECTED_COLUMNS if c != "user4"], "excluded_column": "user4 (never read into any structure)"},
         "cleaning": {"rows_accounted": len(cleaned), "dispositions": disp, "flag_counts": dict(all_flags), "duplicates": dup_counts,
@@ -538,5 +615,10 @@ def prepare(source: Path, out_dir: Path) -> Dict[str, Any]:
     (out_dir / "manifest.json").write_text(json.dumps(manifest, indent=2, sort_keys=True))
     (out_dir / "README.txt").write_text(
         f"{PARITY_STATUS}\nLocal artifacts derived from the historical export ({PREP_VERSION}). Contains redacted student text. Never commit or upload.\n"
-        "Session policies 30m and 2h are provisional. Expected labels are null until human review. Historical assistant answers are context, not predictions.\n")
+        f"{PRIVACY_NOTICE}\n"
+        "Redaction is pattern-based only (no named-entity recognition); identifiers are salted pseudonyms, not anonymous"
+        + ("" if protected else ", and the salt used was the PUBLIC legacy constant") + ".\n"
+        "Session policies 30m and 2h are provisional. Expected labels are null until human review. Historical assistant answers are context, not predictions.\n"
+        "CHALLENGE view = heuristic candidate pool (unvalidated); NATURAL view is not validated as representative.\n"
+        "Never rerun into this directory. Human annotations belong in a separate versioned annotations/ folder that no rerun may touch.\n")
     return manifest
