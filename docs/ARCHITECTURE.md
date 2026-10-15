@@ -111,7 +111,7 @@ graph TD
   - Test suites include unit tests verifying zero outbound network calls are made for non-approved cases.
 - **OpenRouter Adapter (`openrouter.py`)**:
   - Requires explicit `model_id` (no implicit default fallback).
-  - Model Candidate Licensing: Open-weight candidate models are evaluated under their specific license terms. For example, Qwen2.5-7B-Instruct is released under Apache 2.0, whereas Llama-3.1-8B-Instruct is governed by the Meta Llama 3.1 Community License. Licenses and commercial use terms are verified individually.
+  - Model Candidate Licensing: Open-weight candidate models are evaluated under their specific license terms. For example, Qwen models are generally released under Apache 2.0, whereas Llama models are governed by the Meta Llama Community License. The current candidate list lives in `models/catalog.py`; IDs and prices there are unverified planning baselines. Licenses and commercial use terms are verified individually.
   - Reads `OPENROUTER_API_KEY` from the environment without logging or printing the key.
   - Implements bounded exponential backoff for HTTP 429 (rate limits) and 5xx responses.
   - Computes cost estimates based on explicit model pricing metadata; marks costs as `ESTIMATED` or `UNAVAILABLE` when exact billing metrics are absent.
