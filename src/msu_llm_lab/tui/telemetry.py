@@ -106,7 +106,7 @@ class LogBuffer:
         self.entries: Deque[Tuple[str, str, str]] = deque(maxlen=capacity)
         # Startup entries are real facts read at launch (never mock-up text); anything unavailable is simply omitted.
         now = datetime.now().strftime("%H:%M:%S")
-        self.add_log("INFO", "Workbench initialized (dry-run mode; no live requests from this screen)", now)
+        self.add_log("INFO", "Workbench initialized (local only; no live requests from this screen)", now)
         try:
             from msu_llm_lab.models.registry import roster_status
             rows = roster_status()
