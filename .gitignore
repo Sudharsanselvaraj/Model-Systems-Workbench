@@ -72,3 +72,8 @@ Icon
 .vscode/
 *.swp
 *.swo
+
+# Real student conversation export and production prompts (confidential)
+september_to_october.csv
+main_intent_classifier.md
+lead_qualification_prompt.md
