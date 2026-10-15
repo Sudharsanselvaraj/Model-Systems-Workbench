@@ -50,7 +50,7 @@ class ChatClassificationAdapter:
         return ProviderRequest(
             model_id=self.model_id,
             messages=[{"role": "system", "content": prompt_text}, {"role": "user", "content": state_text}],
-            temperature=temperature, max_tokens=MAX_OUTPUT_TOKENS[task], dry_run=False, live_authorized=live_authorized,
+            temperature=temperature, max_tokens=MAX_OUTPUT_TOKENS[task], live_authorized=live_authorized,
             provider_preferences=self.provider_preferences,
         )
 
@@ -60,8 +60,6 @@ class ChatClassificationAdapter:
         if not self.supports(task):
             raise ProviderError(f"Chat adapter does not support task {task}")
         resp = self.provider.generate(self.build_request(task, state_text, prompt_text, live_authorized))
-        if resp.is_dry_run or "SIMULATED" in (resp.usage_source, resp.latency_source, resp.cost_basis):
-            raise ProviderError("A simulated (dry-run) response reached the live classification path and was rejected.")
         issues, warnings = [], []
         label = need = None
         if task == Task.INTENT:
@@ -87,6 +85,7 @@ class ChatClassificationAdapter:
             requested_route=self.provider_preferences, confidence_source="NONE", prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
             usage_source=resp.usage_source, latency_ms=resp.latency_ms, attempt_latency_ms=resp.attempt_latency_ms,
             model_latency_ms=resp.model_latency_ms if resp.model_latency_source == "PROVIDER_REPORTED" else None,
-            attempts=resp.attempts, retry_errors=list(resp.retry_errors), actual_cost_usd=resp.actual_cost_usd,
+            attempts=resp.attempts, retry_errors=list(resp.retry_errors), native_cost=resp.native_cost, native_cost_unit=resp.native_cost_unit,
+            actual_cost_usd=resp.actual_cost_usd,
             estimated_cost_usd=resp.estimated_cost_usd, cost_usd=resp.cost_usd, cost_basis=resp.cost_basis,
         )
