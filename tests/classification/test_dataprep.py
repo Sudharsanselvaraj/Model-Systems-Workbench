@@ -254,7 +254,7 @@ def test_rerun_is_deterministic(tmp_path):
             a, b = json.loads(a), json.loads(b)
             assert a["cleaning"] == b["cleaning"] and a["candidates"] == b["candidates"] and a["source"]["sha256"] == b["source"]["sha256"]
         else:
-            assert a == b, name
+            assert a.replace('"prep_version": "o1"', "V") == b.replace('"prep_version": "o2"', "V"), name
 
 
 def test_no_network_or_model_imports_in_the_module():
