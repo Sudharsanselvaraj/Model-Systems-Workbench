@@ -104,7 +104,7 @@ def make_adapter(script, monkeypatch, step=0.2, **kw):
 
 
 def live_request(**kw):
-    base = dict(model_id=MODEL, messages=[{"role": "user", "content": "synthetic question"}], dry_run=False, live_authorized=True)
+    base = dict(model_id=MODEL, messages=[{"role": "user", "content": "synthetic question"}], live_authorized=True)
     base.update(kw)
     return ProviderRequest(**base)
 
@@ -223,9 +223,10 @@ class CountingProvider(BaseProvider):
 @pytest.mark.parametrize("runner_cls", [BenchmarkRunner, RAGBenchmarkRunner])
 def test_runners_refuse_live_without_authorization(tmp_path, runner_cls):
     prov = CountingProvider()
-    runner = runner_cls(db_mgr=DatabaseManager(db_path=tmp_path / "t.db"), provider=prov)
+    extra = {"retriever": __import__("live_fakes").ExpectedContextRetriever()} if runner_cls is RAGBenchmarkRunner else {}
+    runner = runner_cls(db_mgr=DatabaseManager(db_path=tmp_path / "t.db"), provider=prov, **extra)
     with pytest.raises(LiveNotAuthorizedError):
-        runner.run(model_id=MODEL, dataset_path=_dataset(tmp_path), split=DatasetSplit.TEST, dry_run=False)
+        runner.run(model_id=MODEL, dataset_path=_dataset(tmp_path), split=DatasetSplit.TEST)
     assert prov.calls == 0
 
 
@@ -236,8 +237,10 @@ def test_cli_live_without_confirmation_makes_no_request(tmp_path, monkeypatch, c
     monkeypatch.setattr(OpenRouterAdapter, "generate", lambda self, req: pytest.fail("provider generate called"))
     ds = _dataset(tmp_path)
     args = cmd + ["--model", MODEL, "--dataset", str(ds), "--split", "TEST", "--live"]
-    if cmd == ["benchmark-rag"]:
-        args += ["--retriever", "perfect"]
+    if cmd == ["benchmark-rag"]:  # needs audited KB records for its real BM25 retriever
+        (tmp_path / "data" / "audit").mkdir(parents=True)
+        (tmp_path / "data" / "audit" / "parsed_records_general_kb.jsonl").write_text(
+            '{"record_id": "REC-1", "source_file": "x.md", "question_clean": "fees?", "answer_clean": "RM 1", "parsing_status": "VALID", "programme_name": "P"}\n')
     # Piped stdin containing the exact phrase must NOT bypass the interactive requirement.
     result = CliRunner().invoke(app, args, input=expected_phrase([MODEL]) + "\n")
     assert result.exit_code == 1
@@ -251,14 +254,29 @@ def test_provider_reported_usage_and_estimated_catalog_cost(monkeypatch):
     r = adapter.generate(live_request())
     assert (r.prompt_tokens, r.completion_tokens, r.usage_source) == (1000, 500, "PROVIDER_REPORTED")
     assert r.cost_usd == Decimal("0.001550") and r.cost_basis == "ESTIMATED_FROM_CATALOG"
-    assert r.is_dry_run is False and r.attempts == 1 and r.retry_errors == []
+    assert r.attempts == 1 and r.retry_errors == []
     assert r.raw_response["usage"]["prompt_tokens"] == 1000  # scrubber keeps usage
 
 
-def test_provider_reported_cost_is_preferred(monkeypatch):
+def test_provider_cost_is_kept_as_native_credits_and_not_booked_as_usd_until_the_unit_is_verified(monkeypatch):
     body = {**OK_BODY, "usage": {**OK_BODY["usage"], "cost": 0.0042}}
     r = make_adapter([body], monkeypatch)[0].generate(live_request())
-    assert r.cost_usd == Decimal("0.0042") and r.cost_basis == "PROVIDER_REPORTED"
+    assert r.native_cost == Decimal("0.0042") and r.native_cost_unit == "OPENROUTER_CREDITS_USD_RATE_UNVERIFIED" and r.actual_cost_usd is None
+    assert r.cost_usd == Decimal("0.001550") and r.cost_basis == "ESTIMATED_FROM_CATALOG"  # accounting falls back to the catalog estimate
+
+
+def test_provider_cost_is_booked_as_usd_only_when_the_unit_is_verified(monkeypatch):
+    from msu_llm_lab.models import registry as reg
+    monkeypatch.setattr(reg, "OPENROUTER_COST_UNIT", reg.fact("USD (1 credit = $1)", reg.FactStatus.VERIFIED_PRIMARY, ["https://openrouter.ai/docs"], "test"))
+    body = {**OK_BODY, "usage": {**OK_BODY["usage"], "cost": 0.0042}}
+    r = make_adapter([body], monkeypatch)[0].generate(live_request())
+    assert r.actual_cost_usd == Decimal("0.0042") and r.cost_usd == Decimal("0.0042") and r.cost_basis == "PROVIDER_REPORTED" and r.native_cost == Decimal("0.0042")
+
+
+def test_missing_tokens_with_only_a_native_cost_cannot_be_booked(monkeypatch):
+    body = {"choices": OK_BODY["choices"], "usage": {"cost": 0.0042}}
+    r = make_adapter([body], monkeypatch)[0].generate(live_request())
+    assert r.native_cost == Decimal("0.0042") and r.actual_cost_usd is None and r.estimated_cost_usd is None and r.cost_basis == "UNAVAILABLE"
 
 
 def test_missing_usage_is_unavailable_not_estimated(monkeypatch):
@@ -303,32 +321,28 @@ def test_end_to_end_includes_retry_wait_but_attempt_latency_does_not(monkeypatch
     assert r.attempts == 2 and r.retry_errors == ["HTTP_503"] and r.model_latency_ms is None
 
 
-def test_dry_run_numbers_are_labelled_simulated():
-    r = OpenRouterAdapter().generate(ProviderRequest(model_id=MODEL, messages=[{"role": "user", "content": "q"}], dry_run=True))
-    assert (r.usage_source, r.latency_source, r.cost_basis, r.model_latency_source) == ("SIMULATED",) * 2 + ("SIMULATED",) * 2
-
-
 def test_require_complete_usage():
     ok = ProviderResponse(output_text="x", prompt_tokens=1, completion_tokens=1, usage_source="PROVIDER_REPORTED",
-                          latency_ms=1.0, cost_basis="ESTIMATED_FROM_CATALOG", model_id="m", is_dry_run=False)
+                          latency_ms=1.0, cost_basis="ESTIMATED_FROM_CATALOG", model_id="m")
     require_complete_usage(ok)
-    require_complete_usage(ProviderResponse(output_text="x", latency_ms=1.0, model_id="m", is_dry_run=True))
     for bad in (ok.model_copy(update={"usage_source": "UNAVAILABLE"}), ok.model_copy(update={"cost_basis": "UNAVAILABLE"}),
                 ok.model_copy(update={"usage_source": "PARTIAL"})):
         with pytest.raises(UsageUnavailableError):
             require_complete_usage(bad)
 
 
-def test_runner_aborts_when_live_usage_missing_and_records_no_spend(tmp_path):
-    missing = ProviderResponse(output_text="x", latency_ms=5.0, model_id=MODEL, is_dry_run=False)
+def test_runner_aborts_when_live_usage_missing_and_records_unresolved_spend(tmp_path):
+    missing = ProviderResponse(output_text="x", latency_ms=5.0, model_id=MODEL)
     prov = CountingProvider(missing)
     db = DatabaseManager(db_path=tmp_path / "t.db")
     runner = BenchmarkRunner(db_mgr=db, provider=prov)
     with pytest.raises(UsageUnavailableError):
-        runner.run(model_id=MODEL, dataset_path=_dataset(tmp_path), split=DatasetSplit.TEST, dry_run=False,
+        runner.run(model_id=MODEL, dataset_path=_dataset(tmp_path), split=DatasetSplit.TEST,
                    live_authorization=LiveAuthorization(models=(MODEL,)))
     assert prov.calls == 1
-    assert runner.budget_service.get_status().recent_transactions == []
+    st = runner.budget_service.get_status()
+    assert st.cumulative_spend_usd == 0 and st.unresolved_spend_count == 1      # no amount invented, but the gap is on the ledger
+    assert runner.budget_service.get_status().recent_transactions[0]["is_unresolved"] == 1
 
 
 # ------------------------------------------------------------------ C3: retries
@@ -428,8 +442,8 @@ from msu_llm_lab.providers.base import require_recordable_cost  # noqa: E402
 def test_actual_and_estimated_costs_are_kept_separate(monkeypatch):
     body = {**OK_BODY, "usage": {**OK_BODY["usage"], "cost": 0.0042}}
     r = make_adapter([body], monkeypatch)[0].generate(live_request())
-    assert r.actual_cost_usd == Decimal("0.0042") and r.estimated_cost_usd == Decimal("0.001550")
-    assert r.cost_usd == Decimal("0.0042") and r.cost_basis == "PROVIDER_REPORTED"
+    assert r.native_cost == Decimal("0.0042") and r.actual_cost_usd is None and r.estimated_cost_usd == Decimal("0.001550")
+    assert r.cost_usd == Decimal("0.001550") and r.cost_basis == "ESTIMATED_FROM_CATALOG"  # native, actual and estimated stay separate
 
 
 def test_estimate_requires_both_reported_token_counts(monkeypatch):
@@ -445,16 +459,10 @@ def test_estimate_only_when_provider_reports_no_cost(monkeypatch):
     assert r.cost_basis == "ESTIMATED_FROM_CATALOG" and r.cost_usd == r.estimated_cost_usd
 
 
-def test_dry_run_has_no_actual_or_estimated_cost_fields():
-    r = OpenRouterAdapter().generate(ProviderRequest(model_id=MODEL, messages=[{"role": "user", "content": "q"}], dry_run=True))
-    assert r.actual_cost_usd is None and r.estimated_cost_usd is None and r.cost_basis == "SIMULATED"
-
-
 def test_recordable_cost_rules():
-    base = ProviderResponse(output_text="x", latency_ms=1.0, model_id="m", is_dry_run=False)
+    base = ProviderResponse(output_text="x", latency_ms=1.0, model_id="m")
     for basis in ("PROVIDER_REPORTED", "ESTIMATED_FROM_CATALOG"):
         require_recordable_cost(base.model_copy(update={"cost_basis": basis}))
-    require_recordable_cost(base.model_copy(update={"is_dry_run": True}))
     with pytest.raises(UsageUnavailableError):
         require_recordable_cost(base)  # UNAVAILABLE
     # cost reported but tokens missing: recordable here, still rejected by the token-persisting legacy check
