@@ -1,6 +1,6 @@
 # Implementation Plan: MSU LLM Research Workbench (`msu-llm-lab`)
 
-**Status**: Phases 0–6 Complete; Benchmark v2.1 Baseline Hardened; Phase 7 Next  
+**Status**: Phases 0–6 Complete; Benchmark v2.1 Baseline Hardened; Phase 7 (live provider integration) In Progress  
 **Date**: October 2026  
 
 ---
@@ -31,7 +31,8 @@ graph TD
     P3 --> P5["Phase 5<br/>Fine-Tuning Feasibility<br/>(Proposal & Manifests)"]
     P4 --> P5
     P5 --> P6["Phase 6<br/>Inference Serving Benchmarks<br/>(vLLM & Concurrency Plan)"]
-    P6 --> P7["Phase 7<br/>Local Dashboard<br/>(Streamlit Interface)"]
+    P6 --> P7["Phase 7<br/>Live Provider Integration<br/>(Hard Spend Limits)"]
+    P7 --> P8["Phase 8<br/>Streamlit Dashboard<br/>(Deferred)"]
 ```
 
 ---
@@ -86,13 +87,14 @@ graph TD
 
 ---
 
-### Phase 7: Local Engineering Dashboard *(Current Target)*
-* **Command**: `msu-llm-lab ui` / `msu-llm-lab dashboard`
-* **Status**: Terminal UI operational via `msu-llm-lab ui` (Textual dashboard with health, model catalog, spend ledger); Streamlit local interface is next.
+### Phase 7: Live Provider Integration *(Current Target)*
+* **Command**: `msu-llm-lab benchmark --live` / `msu-llm-lab benchmark-rag --live`
+* **Status**: In progress. Live OpenRouter path exists behind `--live`, an API key and explicit confirmation. Model IDs and prices in the catalog are unverified planning baselines and must be validated against the live API. Unknown models are rejected rather than priced with a default.
+* **Already delivered**: a Rich-based terminal UI (`msu-llm-lab ui`) with health, model catalog and spend ledger. It does not use Textual.
 
 ---
 
-### Phase 7: Local Engineering Dashboard
+### Phase 8: Local Engineering Dashboard (Streamlit) *(Deferred)*
 * **Command**: `msu-llm-lab dashboard`
 * **Objective**: Build a clean, local-only Streamlit interface allowing researchers to inspect KB audit logs, browse evaluation datasets, compare benchmark results, and review trace diagnoses.
 * **Deliverables**:
@@ -109,7 +111,7 @@ graph TD
   - Uses the exact same backend service modules as the CLI.
   - Displays unavailable metrics honestly without placeholder graphs or decorative fake data.
   - Clean, restrained engineering styling.
-* **Dependencies**: Phase 6 approval.
+* **Dependencies**: Phase 7 completion.
 
 ---
 
