@@ -21,7 +21,7 @@ The workspace contains two raw knowledge-base source files:
 
 ### 1.2 Git & Version Control State
 - **Status**: Git repository initialized with strict `.gitignore` excluding secrets, `.venv`, cache, and proprietary knowledge base files.
-- **Test Suite Status**: **93 passed tests** (`uv run pytest`) across audit, budget, dataset, providers, rag, serving, traces, and TUI.
+- **Test Suite Status**: **95 passed tests** (`uv run pytest`) across audit, budget, dataset, providers, rag, serving, traces, and TUI.
 
 ### 1.3 Python & Tooling Environment
 - **System Python**: `3.11.7` (`/Library/Frameworks/Python.framework/Versions/3.11/bin/python3`) — fulfills the Python 3.11 requirement.
@@ -30,7 +30,7 @@ The workspace contains two raw knowledge-base source files:
   - Standard `pip3` is installed at `/Library/Frameworks/Python.framework/Versions/3.11/bin/pip3`.
   - `poetry` is not installed.
 - **Virtual Environment**: Isolated project virtualenv (`.venv`) active.
-- **Test Framework**: `pytest` (93 passing tests in 0.39s).
+- **Test Framework**: `pytest` (95 passing tests in 0.39s).
 
 ### 1.4 Configuration & Secrets State
 - No `.env` or credential files exist in the repository.
@@ -117,11 +117,11 @@ LLM Workbench/
 │       │   └── analyzer.py             # Candidate diagnosis engine (routing, retrieval, generation)
 │       ├── storage/                    # Local persistence
 │       │   └── db.py                   # Lightweight SQLite storage for experiment history
-│       └── tui/                        # Interactive Textual terminal dashboard
+│       └── tui/                        # Interactive Rich terminal dashboard
 │           ├── app.py                  # Full-screen dashboard app
 │           ├── screens.py              # Overview, Models, Audit, Budget screens
 │           └── health.py               # System health & telemetry checks
-├── tests/                              # Automated test suite (93 passing tests)
+├── tests/                              # Automated test suite (95 passing tests)
 │   ├── test_audit.py                   # KB parser, validator, and edge cases
 │   ├── test_budget.py                  # Budget ledger and ceiling enforcement
 │   ├── test_dataset.py                 # Dataset manager and leakage checks
@@ -155,4 +155,4 @@ LLM Workbench/
 | **Provider Adapter (`providers/`)** | Secure OpenRouter API integration for candidate model benchmarking. | **Fail-Closed Confidentiality Gate**: Allows ONLY explicitly approved `PUBLIC` or `SYNTHETIC` records. Rejects `UNCLASSIFIED`, `INTERNAL`, and `CONFIDENTIAL` before any network call. Automated test verifies zero outbound requests on rejection. |
 | **Trace Importer (`traces/`)** | Parse authorized, redacted Langfuse export files (JSON/CSV) as soon as available, without blocking on provider benchmarking. | Offline only. Label diagnostic findings as candidate hypotheses, not ground truth. |
 | **Local Storage (`storage/`)** | SQLite database and file-based JSONL/CSV persistence for runs and outputs. | Local-only, portable, no external cloud dependencies. |
-| **Local Dashboard (`dashboard/`)** | Read-only visual inspection interface (Streamlit) for engineering decisions. | Deferred to Phase 7; shares underlying service modules with CLI. |
+| **Local Dashboard (`dashboard/`)** | Read-only visual inspection interface (Streamlit) for engineering decisions. | Deferred to Phase 8; shares underlying service modules with CLI. |
