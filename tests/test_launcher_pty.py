@@ -21,7 +21,7 @@ pytestmark = pytest.mark.skipif(sys.platform == "win32", reason="needs a POSIX p
 def run_launcher(keys, rows=55, cols=207, settle=0.6):
     master, slave = pty.openpty()
     fcntl.ioctl(slave, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
-    env = {**os.environ, "TERM": "xterm-256color", "COLUMNS": str(cols), "LINES": str(rows)}
+    env = {**os.environ, "TERM": "xterm-256color", "COLUMNS": str(cols), "LINES": str(rows), "MSU_LLM_SKIP_DOTENV": "1"}
     env.pop("OPENROUTER_API_KEY", None)
     proc = subprocess.Popen([sys.executable, "-c", "from msu_llm_lab.cli import app; app()"], stdin=slave, stdout=slave, stderr=slave,
                             cwd=ROOT, env=env, close_fds=True)
