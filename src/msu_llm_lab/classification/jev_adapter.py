@@ -37,8 +37,9 @@ def _count(v: Any) -> Optional[int]:
 
 # OpenRouter's example response shows the served snapshot of 1.13 as `typesafe/jev-1.13-20260917`, and its endpoint metadata
 # names the 1.14 endpoint `typesafe/jev-1.14-20261014` (base id + "-" + 8-digit date). Both show the form, but no actual 1.14
-# RESPONSE has been seen yet, so an accepted dated snapshot still carries a warning and any other suffix is fatal.
-SNAPSHOT_RULE_STATUS = "FORM_DOCUMENTED_FOR_1.13_RESPONSE_AND_1.14_ENDPOINT_METADATA_NOT_YET_SEEN_IN_A_1.14_RESPONSE"
+# RESPONSE had been seen before the first live smoke run. Snapshots recorded in the registry's live evidence are accepted without a warning; a new
+# dated snapshot is accepted with a warning, and any other suffix is fatal.
+SNAPSHOT_RULE_STATUS = "1.14_SNAPSHOT_20261014_LIVE_OBSERVED_IN_STORED_SMOKE_RECORDS"
 _RESOLVED = re.compile(r"^(?P<base>typesafe/jev-\d+\.\d+)(?:-(?P<snap>\d{8}))?$")
 
 
@@ -87,8 +88,8 @@ def parse_decisions_response(
             issues.append("RESOLVED_VERSION_DIFFERS_FROM_REQUESTED")
         elif kind == "UNRECOGNISED":
             issues.append("RESOLVED_VERSION_FORM_UNRECOGNISED")
-        elif kind == "DATED_SNAPSHOT":
-            warnings.append("DATED_SNAPSHOT_NOT_YET_SEEN_IN_A_1_14_RESPONSE")
+        elif kind == "DATED_SNAPSHOT" and resolved not in registry.observed_snapshots(requested_model_id):
+            warnings.append("DATED_SNAPSHOT_NOT_PREVIOUSLY_OBSERVED")  # a snapshot seen in stored live evidence carries no warning
     provider = data.get("provider")
     if provider is None:
         warnings.append("PROVIDER_MISSING")
