@@ -1,4 +1,4 @@
-"""Evaluation schemas and confidentiality classifications for MSU LLM Inference Workbench."""
+"""Evaluation schemas and confidentiality classifications for MSU LLM Workbench."""
 
 from datetime import datetime
 from enum import Enum
