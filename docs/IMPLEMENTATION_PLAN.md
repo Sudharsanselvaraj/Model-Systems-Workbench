@@ -30,7 +30,7 @@ graph TD
     P2 --> P4["Phase 4<br/>RAG Analysis & Trace Import<br/>(Decoupled: Runs when export arrives)"]
     P3 --> P5["Phase 5<br/>Fine-Tuning Feasibility<br/>(Proposal & Manifests)"]
     P4 --> P5
-    P5 --> P6["Phase 6<br/>Inference Serving Benchmarks<br/>(vLLM & Concurrency Plan)"]
+    P5 --> P6["Phase 6<br/>Serving simulation<br/>(REMOVED)"]
     P6 --> P7["Phase 7<br/>Live Provider Integration<br/>(Hard Spend Limits)"]
     P7 --> P8["Phase 8<br/>Streamlit Dashboard<br/>(Deferred)"]
 ```
@@ -65,7 +65,7 @@ graph TD
 
 ### Phase 3: Reproducible OpenRouter Evaluation *(Complete)*
 * **Command**: `msu-llm-lab benchmark [OPTIONS]` and `msu-llm-lab compare-runs [RUN_A] [RUN_B]`
-* **Status**: Complete. OpenRouter adapter, fail-closed confidentiality gatekeeper, budget ledger, rubric evaluation, and dry-run simulation.
+* **Status**: Complete. OpenRouter adapter, fail-closed confidentiality gatekeeper, budget ledger, rubric evaluation (the dry-run simulation was later removed) simulation.
 
 ---
 
@@ -81,9 +81,8 @@ graph TD
 
 ---
 
-### Phase 6: Inference Serving & Hardware Sizing Simulation *(Complete)*
-* **Command**: `msu-llm-lab simulate-serving [OPTIONS]`
-* **Status**: Complete. Automated vLLM serving simulation, memory footprint calculations (weights, KV-cache, activations), progressive concurrency ramps (1–150 workers), and cloud vs. on-premise cost crossover analysis across H100, A100, and Mac Studio unified memory profiles.
+### Phase 6: Inference Serving & Hardware Sizing Simulation *(Removed)*
+* The serving simulator (`simulate-serving`, `msu_llm_lab.serving`) was a model, not a measurement, and was removed so the workbench contains only real workflows. Self-hosted serving would be evaluated with real measurements if it is ever pursued.
 
 ---
 
