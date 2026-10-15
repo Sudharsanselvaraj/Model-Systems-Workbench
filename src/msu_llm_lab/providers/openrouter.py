@@ -1,4 +1,4 @@
-"""OpenRouter provider adapter with fail-closed confidentiality gate and dry-run engine."""
+"""OpenRouter provider adapter with a fail-closed confidentiality gate. Every response is a real provider response."""
 
 import json
 import os
@@ -34,7 +34,7 @@ def _count(value: Any) -> Optional[int]:
 
 
 class OpenRouterAdapter(BaseProvider):
-    """Adapter for OpenRouter API with fail-closed privacy gatekeeper and dry-run engine."""
+    """Adapter for the OpenRouter chat-completions API with a fail-closed privacy gatekeeper."""
 
     DEFAULT_BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
@@ -101,42 +101,6 @@ class OpenRouterAdapter(BaseProvider):
         cost_out = (Decimal(completion_tokens) * out_price) / Decimal("1000000")
         return (cost_in + cost_out).quantize(Decimal("0.000001"))
 
-    def _simulate_dry_run(self, request: ProviderRequest) -> ProviderResponse:
-        """Deterministic dry-run mock response generator with zero network dispatch.
-
-        Every number here is SIMULATED and labelled so; it must never be reported as a provider measurement.
-        """
-        user_msg = ""
-        for m in request.messages:
-            if m.get("role") == "user":
-                user_msg = m.get("content", "")
-
-        p_tok = max(10, int(len(user_msg.split()) * 1.35))
-        
-        if request.expected_answer:
-            output = f"Based on MSU official academic regulations: {request.expected_answer}"
-        else:
-            output = f"MSU Admissions Advisory: Information regarding '{user_msg[:60]}' is governed by faculty guidelines."
-
-        c_tok = max(15, int(len(output.split()) * 1.35))
-        latency = round(140.0 + (c_tok * 2.8), 2)
-        cost = self._calculate_cost(request.model_id, p_tok, c_tok)
-
-        return ProviderResponse(
-            output_text=output,
-            prompt_tokens=p_tok,
-            completion_tokens=c_tok,
-            usage_source="SIMULATED",
-            latency_ms=latency,
-            latency_source="SIMULATED",
-            model_latency_source="SIMULATED",
-            cost_usd=cost,
-            cost_basis="SIMULATED",
-            model_id=request.model_id,
-            is_dry_run=True,
-            raw_response={"simulation": True, "provider": "openrouter_mock"},
-        )
-
     def _extract_provider_latency(self, data: Dict[str, Any]) -> Optional[float]:
         if not self.provider_latency_field:
             return None
@@ -171,7 +135,9 @@ class OpenRouterAdapter(BaseProvider):
             "PARTIAL" if (p_tok is not None or c_tok is not None) else "UNAVAILABLE")
 
         reported = usage.get("cost")
-        actual = Decimal(str(reported)) if isinstance(reported, (int, float)) and not isinstance(reported, bool) and reported >= 0 else None
+        native = Decimal(str(reported)) if isinstance(reported, (int, float)) and not isinstance(reported, bool) and reported >= 0 else None
+        # The unit of usage.cost is "credits"; it is booked as USD only when that unit is verified. Otherwise the native value is kept aside.
+        actual = native if (native is not None and registry.provider_cost_is_usd()) else None
         # Estimates need provider-reported tokens AND a verified route-specific price (legacy catalog models are unchanged).
         estimated = (
             self._calculate_cost(request.model_id, p_tok, c_tok)
@@ -202,27 +168,25 @@ class OpenRouterAdapter(BaseProvider):
             model_latency_source="PROVIDER_REPORTED" if model_ms is not None else "UNAVAILABLE",
             attempts=attempts,
             retry_errors=list(errors),
+            native_cost=native,
+            native_cost_unit=registry.NATIVE_COST_UNIT_LABEL if native is not None else None,
             actual_cost_usd=actual,
             estimated_cost_usd=estimated,
             cost_usd=cost,
             cost_basis=basis,
             model_id=request.model_id,
-            is_dry_run=False,
             raw_response=self.scrub_secrets(data),
         )
 
     def generate(self, request: ProviderRequest) -> ProviderResponse:
-        """Executes model generation in dry-run mode or dispatches a live network call."""
-        if request.dry_run:
-            return self._simulate_dry_run(request)
-
+        """Dispatches one real request. There is no simulated mode: every response comes from the provider."""
         # Live execution gates, all checked BEFORE any request is built or sent.
         if not request.live_authorized:
             raise LiveNotAuthorizedError("Live request refused: it carries no explicit live authorization.")
         if not self.api_key or not self.api_key.strip():
             raise ProviderError(
                 "OPENROUTER_API_KEY environment variable not configured. "
-                "Live network calls require a valid API key. Use --dry-run for local offline simulation."
+                "Live network calls require a valid API key (set it in your shell; run `msu-llm-lab api-preflight` to check)."
             )
         blockers = registry.synthetic_live_blockers(request.model_id, self.registry_stage)
         if blockers:
