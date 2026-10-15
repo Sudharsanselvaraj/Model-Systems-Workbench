@@ -29,7 +29,6 @@ class ProbItem:
     yes_prob: Optional[float]      # native P(yes); None = unavailable (never imputed)
     split: DatasetSplit
     exclusion_reason: Optional[str] = None
-    is_dry_run: bool = False
 
 
 class SweepRow(BaseModel):
@@ -71,8 +70,6 @@ class HeldOutReport(BaseModel):
 
 
 def _usable(items: Sequence[ProbItem]) -> Tuple[List[ProbItem], int]:
-    if any(i.is_dry_run for i in items):
-        raise ThresholdError("Dry-run/simulated records must never enter threshold analysis")
     scored, missing = [], 0
     for i in items:
         if i.exclusion_reason is not None or i.expected is None:
