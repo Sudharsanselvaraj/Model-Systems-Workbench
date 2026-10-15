@@ -10,7 +10,14 @@ from pydantic import BaseModel, Field
 from msu_llm_lab.core.budget import BudgetExceededError, BudgetService
 from msu_llm_lab.dataset.manager import DatasetManager
 from msu_llm_lab.evaluation.evaluator import RubricEvaluator
-from msu_llm_lab.providers.base import BaseProvider, ProviderRequest
+from msu_llm_lab.core.live_guard import LiveAuthorization, require_live_authorization
+from msu_llm_lab.providers.base import (
+    BaseProvider,
+    LiveNotAuthorizedError,
+    ProviderRequest,
+    UsageUnavailableError,
+    require_complete_usage,
+)
 from msu_llm_lab.providers.openrouter import OpenRouterAdapter
 from msu_llm_lab.schemas.evaluation import DatasetSplit, EvaluationCase
 from msu_llm_lab.storage.db import DatabaseManager
@@ -55,8 +62,11 @@ class BenchmarkRunner:
         dataset_path: Path,
         split: Optional[DatasetSplit] = None,
         dry_run: bool = True,
+        live_authorization: Optional[LiveAuthorization] = None,
     ) -> BenchmarkRunReport:
         """Executes candidate model evaluation over the specified dataset."""
+        if not dry_run:
+            require_live_authorization(live_authorization, model_id)
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -106,12 +116,14 @@ class BenchmarkRunner:
                 model_id=model_id,
                 messages=prompt_messages,
                 dry_run=dry_run,
+                live_authorized=not dry_run,
                 case_id=case.id,
                 expected_answer=case.expected_answer,
             )
 
             try:
                 response = self.provider.generate(request)
+                require_complete_usage(response)
                 exec_id = f"exec_{run_id}_{case.id}"
                 score_id = f"score_{run_id}_{case.id}"
 
@@ -132,6 +144,7 @@ class BenchmarkRunner:
                     run_id=run_id,
                     is_pilot=True,
                     is_preflight_estimate=False,
+                    is_simulated=dry_run,
                 )
                 total_run_cost += response.cost_usd
 
@@ -156,7 +169,7 @@ class BenchmarkRunner:
 
             except Exception as e:
                 failed_count += 1
-                if isinstance(e, BudgetExceededError):
+                if isinstance(e, (BudgetExceededError, UsageUnavailableError, LiveNotAuthorizedError)):
                     raise
 
         # 4. Aggregate metrics
