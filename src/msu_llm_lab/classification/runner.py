@@ -58,6 +58,7 @@ class RunSummary:
     n_error: int = 0
     n_skipped_existing: int = 0
     recorded_cost_usd: Decimal = Decimal("0")
+    guard_cost_usd: Decimal = Decimal("0")     # larger of booked and native cost per case; used only for the stop checks
     aborted_reason: Optional[str] = None
     records: List[PredictionRecord] = field(default_factory=list)
 
@@ -185,8 +186,6 @@ class ClassificationRunner:
                                               else f"{consecutive} consecutive errors")
                     break
                 continue
-            if result.is_dry_run:
-                raise ProviderError("A dry-run result reached the live classification runner and was rejected.")
             consecutive = 0
             rec = record_from_result(result, run_id=run_id, case_id=case.case_id, model_key=model_id, prompt_version=pv,
                                      dataset_version=dataset_version, store_raw_output=store_raw_output,
@@ -199,6 +198,12 @@ class ClassificationRunner:
                 summary.n_invalid += 1
             if result.cost_basis == "UNAVAILABLE":
                 summary.aborted_reason = "cost unavailable: spend cannot be recorded"
+                # The request may have been billed. Record an explicit unresolved entry (no amount is invented); further live runs are
+                # blocked by the budget preflight until it is reconciled with a real amount.
+                self.budget.record_unresolved_spend(
+                    transaction_id=f"tx_{run_id}_{case.case_id}", model_id=model_id, provider="openrouter",
+                    description=f"Classification {task.value} case {case.case_id}: response lacked usable cost or token counts", run_id=run_id,
+                )
                 raise UsageUnavailableError(
                     "Live response has neither a provider-reported cost nor reported tokens for an estimate; run stopped. "
                     "Check the provider dashboard for this request.", attempts=result.attempts,
@@ -206,14 +211,18 @@ class ClassificationRunner:
             self.budget.record_spend(
                 transaction_id=f"tx_{run_id}_{case.case_id}", model_id=model_id, provider="openrouter", amount_usd=result.cost_usd,
                 description=f"Classification {task.value} case {case.case_id} [{result.cost_basis}]", run_id=run_id, is_pilot=True,
-                is_preflight_estimate=False,
+                is_preflight_estimate=False, cost_basis=result.cost_basis,
             )
             summary.recorded_cost_usd += result.cost_usd
-            if hard_cap_usd is not None and summary.recorded_cost_usd > hard_cap_usd:
+            # Guard on the larger of the booked cost and the provider's native cost, so an anomalous native figure stops the run even
+            # though it is not booked as USD.
+            guard = max(result.cost_usd, result.native_cost or Decimal("0"))
+            summary.guard_cost_usd += guard
+            if hard_cap_usd is not None and summary.guard_cost_usd > hard_cap_usd:
                 summary.aborted_reason = "hard cap exceeded"
-                raise BudgetExceededError(f"Recorded cost ${summary.recorded_cost_usd} exceeds the hard cap ${hard_cap_usd}; run stopped.")
-            if result.cost_usd > self.budget.policy.per_case_ceiling_usd:
+                raise BudgetExceededError(f"Guard cost ${summary.guard_cost_usd} exceeds the hard cap ${hard_cap_usd}; run stopped.")
+            if guard > self.budget.policy.per_case_ceiling_usd:
                 summary.aborted_reason = "per-case ceiling exceeded"
                 raise BudgetExceededError(
-                    f"Case {case.case_id} cost ${result.cost_usd} exceeds the per-case ceiling ${self.budget.policy.per_case_ceiling_usd}; run stopped.")
+                    f"Case {case.case_id} cost ${guard} exceeds the per-case ceiling ${self.budget.policy.per_case_ceiling_usd}; run stopped.")
         return summary
