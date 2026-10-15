@@ -203,6 +203,9 @@ def build_plan(
             for b in blockers:
                 blocked.append(f"{key} ({task.value}): {b}")
     total = sum((r.upper_bound_usd or Decimal("0") for r in rows), Decimal("0"))
+    pending = budget.unresolved()
+    if pending:
+        blocked.append(f"{len(pending)} unresolved-spend ledger entr{'y' if len(pending) == 1 else 'ies'}: reconcile with `msu-llm-lab budget reconcile` first")
     if hard_cap_usd <= 0:
         blocked.append("hard cap must be positive")
     if hard_cap_usd > policy.per_run_ceiling_usd:
