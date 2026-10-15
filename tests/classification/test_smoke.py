@@ -239,7 +239,7 @@ def test_models_roster_command_lists_all_ten_with_precise_readiness(cli_env):
     assert r.exit_code == 0
     for name in ("Gemini", "GPT-4.1-mini", "Jev 1.14", "GPT-4.1 Nano", "GPT-4o", "Qwen3.5", "DeepSeek", "Mistral", "Claude Sonnet 5"):
         assert name in r.output, name
-    assert "SMOKE_READY" in r.output and "NOT_YET_EVALUATED" in r.output and "PRODUCTION_BASELINE" in r.output and "FRONTIER_REFERENCE" in r.output
+    assert "READY" in r.output and "NOT_YET_EVALUATED" in r.output and "PRODUCTION_BASELINE" in r.output and "FRONTIER_REFERENCE" in r.output
 
 
 # ------------------------------------------------------------------ Jev version forms (documented for 1.13 only)
@@ -257,10 +257,13 @@ def parse(model_value, present=True):
 
 def test_exact_and_dated_1_14_identifiers_are_accepted_with_an_explicit_warning_for_the_snapshot_form():
     exact = parse("typesafe/jev-1.14")
-    assert exact.ok and exact.resolved_model_id == "typesafe/jev-1.14" and "DATED_SNAPSHOT_NOT_YET_SEEN_IN_A_1_14_RESPONSE" not in exact.warnings
-    dated = parse("typesafe/jev-1.14-20261001")
-    assert dated.ok and dated.resolved_model_id == "typesafe/jev-1.14-20261001" and "DATED_SNAPSHOT_NOT_YET_SEEN_IN_A_1_14_RESPONSE" in dated.warnings
-    assert "NOT_YET_SEEN_IN_A_1.14_RESPONSE" in ja.SNAPSHOT_RULE_STATUS
+    exact = parse("typesafe/jev-1.14")
+    assert exact.ok and exact.resolved_model_id == "typesafe/jev-1.14" and not any("DATED_SNAPSHOT" in w for w in exact.warnings)
+    seen = parse("typesafe/jev-1.14-20261014")      # the snapshot recorded in the stored live evidence: no warning
+    assert seen.ok and not any("DATED_SNAPSHOT" in w for w in seen.warnings)
+    dated = parse("typesafe/jev-1.14-20261001")      # a snapshot never observed: accepted, with an explicit warning
+    assert dated.ok and dated.resolved_model_id == "typesafe/jev-1.14-20261001" and "DATED_SNAPSHOT_NOT_PREVIOUSLY_OBSERVED" in dated.warnings
+    assert "LIVE_OBSERVED" in ja.SNAPSHOT_RULE_STATUS
 
 
 @pytest.mark.parametrize("returned", ["typesafe/jev-1.13-20260917", "typesafe/jev-1.13", "typesafe/jev-1.15-20261101", "typesafe/jev-1.140"])
@@ -317,9 +320,8 @@ def test_pilot_plan_covers_every_participant_with_per_task_support_and_exact_blo
     assert by["baseline-intent-gemini-3.5-flash-lite"] == {"INTENT"} and by["baseline-lead-gpt-4.1-mini"] == {"LEAD"}
     assert by["gpt-4.1"] == {"INTENT", "LEAD"} and by["jev-1.14"] == {"INTENT", "LEAD"}
     assert plan.stage == "pilot" and "EXPANDED PILOT" in "\n".join(smoke.render_plan(plan))
-    # strict gating: Jev stays blocked until a smoke test confirms its response schema; every chat route is clear
-    assert plan.blocked and all("jev-1.14" in b for b in plan.blocked_reasons)
-    assert {b.split(" ")[0] + ":" + b.rsplit(": ", 1)[1] for b in plan.blocked_reasons} == {"jev-1.14:response_shape", "jev-1.14:usage_fields"}
+    # Jev's schema facts are LIVE_OBSERVED, so no participant is blocked at the pilot stage for synthetic data
+    assert not plan.blocked and plan.blocked_reasons == []
     assert plan.total_upper_bound_usd <= plan.hard_cap_usd
 
 
