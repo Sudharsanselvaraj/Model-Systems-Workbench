@@ -26,6 +26,7 @@ from msu_llm_lab.tui.screens import (
     build_system_and_metrics_panel,
     build_inference_status_panel,
     build_model_catalogue_panel,
+    build_roster_panel,
     build_budget_main_panel,
     build_dataset_validation_panel,
     build_evaluation_main_panel,
@@ -71,6 +72,7 @@ class WorkbenchTUI:
         self.sidebar_cursor: int = 0     # Cursor position in sidebar list (0-7)
         self.focused_pane: str = "NAV"   # "NAV", "MAIN", or "COMMAND"
         self.model_cursor: int = 0       # Cursor for Model Catalogue table
+        self.show_roster: bool = False   # True when the comparison roster replaces the catalogue table
         self.content_cursor: int = 0     # Cursor for current active main panel table rows
         self.input_mode: InputMode = InputMode.NORMAL
 
@@ -241,6 +243,9 @@ class WorkbenchTUI:
         # 5. Main Content Panel (Dynamic central area)
         if self.input_mode == InputMode.HELP or self.nav_index == 7:
             content_panel = build_help_main_panel(self.focused_pane == "MAIN")
+        elif self.nav_index == 0 and self.show_roster:
+            from msu_llm_lab.models.registry import roster_status
+            content_panel = build_roster_panel(roster_status(), self.model_cursor, self.focused_pane == "MAIN")
         elif self.nav_index == 0:
             content_panel = build_model_catalogue_panel(
                 self.candidates,
@@ -745,7 +750,15 @@ class WorkbenchTUI:
         parts = raw_cmd.split()
         cmd = parts[0].lower()
 
-        if cmd in ("models", "m", "1"):
+        if cmd == "roster":
+            self.show_roster = True
+            self.nav_index = 0
+            self.sidebar_cursor = 0
+            self.focused_pane = "MAIN"
+            self.feedback_message = "Comparison roster: all participants, readiness and exact blockers"
+            self.log_buffer.add("INFO", "Navigated to Comparison Roster")
+        elif cmd in ("models", "m", "1"):
+            self.show_roster = False
             self.nav_index = 0
             self.sidebar_cursor = 0
             self.focused_pane = "MAIN"
