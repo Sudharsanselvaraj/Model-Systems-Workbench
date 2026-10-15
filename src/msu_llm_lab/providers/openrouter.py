@@ -29,6 +29,9 @@ from msu_llm_lab.providers.http import (  # noqa: F401  (re-exported for callers
 from msu_llm_lab.schemas.evaluation import EvaluationCase
 
 
+ALLOWED_EXTRA_FIELDS = frozenset({"reasoning"})
+
+
 def _count(value: Any) -> Optional[int]:
     return value if isinstance(value, int) and not isinstance(value, bool) and value >= 0 else None
 
@@ -126,6 +129,7 @@ class OpenRouterAdapter(BaseProvider):
             )
         choices = data.get("choices") or []
         out_text = ""
+        finish = choices[0].get("finish_reason") if (choices and isinstance(choices[0], dict) and isinstance(choices[0].get("finish_reason"), str)) else None
         if choices and isinstance(choices[0], dict):
             content = (choices[0].get("message") or {}).get("content")
             out_text = content if isinstance(content, str) else ""
@@ -134,6 +138,8 @@ class OpenRouterAdapter(BaseProvider):
         usage_source = "PROVIDER_REPORTED" if (p_tok is not None and c_tok is not None) else (
             "PARTIAL" if (p_tok is not None or c_tok is not None) else "UNAVAILABLE")
 
+        details = usage.get("completion_tokens_details") if isinstance(usage.get("completion_tokens_details"), dict) else {}
+        reasoning_tokens = _count(details.get("reasoning_tokens"))
         reported = usage.get("cost")
         native = Decimal(str(reported)) if isinstance(reported, (int, float)) and not isinstance(reported, bool) and reported >= 0 else None
         # The unit of usage.cost is "credits"; it is booked as USD only when that unit is verified. Otherwise the native value is kept aside.
@@ -168,7 +174,7 @@ class OpenRouterAdapter(BaseProvider):
             model_latency_source="PROVIDER_REPORTED" if model_ms is not None else "UNAVAILABLE",
             attempts=attempts,
             retry_errors=list(errors),
-            native_cost=native,
+            finish_reason=finish, reasoning_tokens=reasoning_tokens, native_cost=native,
             native_cost_unit=registry.NATIVE_COST_UNIT_LABEL if native is not None else None,
             actual_cost_usd=actual,
             estimated_cost_usd=estimated,
@@ -202,6 +208,10 @@ class OpenRouterAdapter(BaseProvider):
             payload["temperature"] = request.temperature
         if request.provider_preferences:
             payload["provider"] = request.provider_preferences
+        for k, v in (request.extra_fields or {}).items():
+            if k not in ALLOWED_EXTRA_FIELDS:
+                raise ProviderError(f"Request field '{k}' is not on the approved extra-field list; refused before sending.")
+            payload[k] = v
         headers = {
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
