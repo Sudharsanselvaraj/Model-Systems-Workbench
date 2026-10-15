@@ -1,4 +1,4 @@
-"""Classification metrics computed from approved labels only. Never from dry-run or unreviewed data."""
+"""Classification metrics computed from approved labels only. Never from unreviewed data."""
 
 from dataclasses import dataclass
 from enum import Enum
@@ -31,7 +31,6 @@ class IntentItem:
     expected: Optional[IntentLabel]
     predicted: Optional[IntentLabel]  # None = invalid output
     exclusion_reason: Optional[str] = None
-    is_dry_run: bool = False
 
 
 @dataclass
@@ -39,7 +38,6 @@ class LeadItem:
     expected: Optional[bool]
     predicted: Optional[bool]  # None = invalid output
     exclusion_reason: Optional[str] = None
-    is_dry_run: bool = False
 
 
 class ClassStats(BaseModel):
@@ -94,8 +92,6 @@ def _f1(p: Optional[float], r: Optional[float], tp: int, fp: int, fn: int) -> Op
 
 
 def _scorable(items, kind: str):
-    if any(i.is_dry_run for i in items):
-        raise MetricsError("Dry-run/simulated records must never enter a metrics report")
     excluded = [i for i in items if i.exclusion_reason is not None]
     rest = [i for i in items if i.exclusion_reason is None]
     unlabeled = [i for i in rest if i.expected is None]
