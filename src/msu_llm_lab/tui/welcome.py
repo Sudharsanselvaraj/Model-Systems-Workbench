@@ -46,10 +46,10 @@ LOGO_BRAILLE_STRIPPED: List[str] = [
 MENU_ITEMS: List[Tuple[str, str, Optional[str]]] = [
     ("1.  Launch Full-Screen TUI Dashboard", "Live telemetry and monitors", None),
     ("2.  Run Knowledge Base Audit & Remediation", "parsed records", None),
-    ("3.  Run Decoupled RAG Benchmark", "v2.1 baseline, Recall@k sweep", None),
+    ("3.  Classification Dataset Status", "Local preparation, labels unapproved", None),
     ("4.  Model Comparison Roster", "Readiness, routes and blockers", "NEW"),
-    ("5.  Diagnose Production Traces", "Langfuse ingestion and analysis", None),
-    ("6.  Simulate vLLM Serving & Hardware Sizing", "A100 / Mac Studio", None),
+    ("5.  API Preflight", "Key present? No request is sent", None),
+    ("6.  Smoke-Test Plan (plan only)", "Exact cases, routes and caps", None),
     ("7.  Inspect Budget & Spend Ceilings", "actual spend vs ceilings", None),
     ("8.  Settings & KB Hashes", "Providers, paths, cryptographic baseline", None),
     ("9.  Exit to Shell", "", None),
@@ -152,7 +152,7 @@ class WelcomeScreen:
         box_content = (
             "[bold #f1f3f9]MSU Admissions AI Research Environment[/]\n"
             "[dim #9ca3af]Audit the knowledge base. Benchmark retrieval with isolated ground truth. Compare models.[/]\n"
-            "[dim #9ca3af]Diagnose traces. Plan and size vLLM serving. Maintain budget controls and data confidentiality.[/]"
+            "[dim #9ca3af]Prepare and review classification data. Compare models under hard spend caps. Keep student data local.[/]"
         )
         panel = Panel(
             box_content,
