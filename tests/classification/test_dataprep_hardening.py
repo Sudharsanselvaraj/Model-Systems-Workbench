@@ -1,9 +1,11 @@
 """Hardening tests for local dataset preparation: narrowed O1, overwrite protection, versioning, pseudonymisation and visible limitations."""
 
 import hashlib
+import json
 import re
 
 import pytest
+from typer.testing import CliRunner
 
 from msu_llm_lab.classification import dataprep as dp
 from test_dataprep import lines, prepared, write_csv  # noqa: F401  (prepared is a fixture)
@@ -118,10 +120,75 @@ def test_prepare_command_refuses_to_overwrite_and_creates_a_new_version_on_reque
     src = tmp_path / "syn.csv"
     write_csv(src)
     out = tmp_path / "data" / "prep-v1"
-    first = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(out)])
+    first = CliRunner(env={"COLUMNS": "200"}).invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(out), "--allow-public-salt"])
     assert first.exit_code == 0 and "pseudonymization: public-legacy-v1 (protected: False)" in first.output and dp.PRIVACY_NOTICE in first.output
     snap = (out / "cleaned_rows.jsonl").read_text()
-    again = CliRunner().invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(out)])
+    again = CliRunner().invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(out), "--allow-public-salt"])
     assert again.exit_code == 1 and "Refused" in again.output and (out / "cleaned_rows.jsonl").read_text() == snap
-    versioned = CliRunner().invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(out), "--new-version"])
+    versioned = CliRunner().invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(out), "--new-version", "--allow-public-salt"])
     assert versioned.exit_code == 0 and (tmp_path / "data" / "prep-v1-r2" / "manifest.json").exists()
+
+
+def test_dashboard_label_files_stay_protected_from_the_preparation_command(tmp_path):
+    from obs_helpers import label_row, make_prep, write_labels
+    prep = make_prep(tmp_path / "classification_prep")
+    write_labels(prep, [label_row("C1", "INTENT", "QUERY")])
+    src = tmp_path / "syn.csv"
+    write_csv(src)
+    snapshot = {p: p.read_bytes() for p in prep.rglob("*") if p.is_file()}
+    with pytest.raises(dp.PrepOverwriteError):
+        dp.prepare(src, prep)
+    assert {p: p.read_bytes() for p in prep.rglob("*") if p.is_file()} == snapshot
+
+
+def test_cli_refuses_the_public_salt_unless_explicitly_allowed(tmp_path, monkeypatch):
+    from msu_llm_lab.cli import app
+    monkeypatch.delenv(dp.SALT_ENV, raising=False)
+    src = tmp_path / "syn.csv"
+    write_csv(src)
+    res = CliRunner().invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(tmp_path / "o")])
+    assert res.exit_code == 1 and "No private salt" in res.output and not (tmp_path / "o").exists()
+
+
+def test_hidden_salt_prompt_is_never_echoed_stored_or_printed(tmp_path, monkeypatch):
+    from msu_llm_lab.cli import app
+    monkeypatch.delenv(dp.SALT_ENV, raising=False)
+    secret = "correct-horse-battery-staple-9"
+    answers = iter([secret, secret])
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": next(answers))
+    src = tmp_path / "syn.csv"
+    write_csv(src)
+    out = tmp_path / "prep-v9"
+    res = CliRunner().invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(out), "--prompt-salt"])
+    assert res.exit_code == 0, res.output
+    assert secret not in res.output and "protected: True" in res.output
+    assert all(secret not in p.read_text() for p in out.iterdir())
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["prep_version"] == "prep-v9" and manifest["pseudonymization"]["protected_secret_used"] is True
+    monkeypatch.delenv(dp.SALT_ENV, raising=False)
+
+
+def test_mismatched_or_short_hidden_secrets_write_nothing(tmp_path, monkeypatch):
+    from msu_llm_lab.cli import app
+    monkeypatch.delenv(dp.SALT_ENV, raising=False)
+    answers = iter(["aaaaaaaaaaaaaaaa", "bbbbbbbbbbbbbbbb"])
+    monkeypatch.setattr("getpass.getpass", lambda prompt="": next(answers))
+    src = tmp_path / "syn.csv"
+    write_csv(src)
+    res = CliRunner().invoke(app, ["prepare-classification-data", "--source", str(src), "--out-dir", str(tmp_path / "o"), "--prompt-salt"])
+    assert res.exit_code == 1 and not (tmp_path / "o").exists()
+
+
+def test_version_recorded_in_artifacts_is_the_folder_name_and_is_restored(tmp_path):
+    src = tmp_path / "syn.csv"
+    write_csv(src)
+    m = dp.prepare(src, tmp_path / "prep-v7")
+    assert m["prep_version"] == "prep-v7" and dp.PREP_VERSION == "prep-v1"
+    first = json.loads((tmp_path / "prep-v7" / "intent_candidates_2h.jsonl").read_text().splitlines()[0])
+    assert first["candidate"]["prep_version"] == "prep-v7"
+
+
+def test_extended_redaction_covers_passports_introductions_and_relatives_without_eating_ordinary_words():
+    text, c = dp.redact("Hi I am Aisha Rahman, passport A12345678. My father's name is Ahmad Zaki. I am interested in IT. I am Looking for fees")
+    assert "Aisha" not in text and "A12345678" not in text and "Ahmad" not in text
+    assert "I am interested in IT" in text and "I am Looking for fees" in text and c["[NAME]"] >= 2 and c["[ID_NUMBER]"] == 1
