@@ -31,7 +31,7 @@ A local-first research workbench for auditing admissions knowledge bases, prepar
 > **Alpha.** The workbench contains no simulated or mock mode: every model response it records came from a provider, and a request is only ever sent after you type approval of the exact plan. A first sampled real-data benchmark has been run under typed operator authorization (17 of 222 blocks, 11 participants); ground truth is still pending, so no accuracy is reported. **Production parity is not established** (the Dify workflow export is missing), and no provider data policy is verified, so student-derived data may not be sent to any provider.
 
 <p align="center">
-  <img src="assets/readme/launcher_banner.png" alt="Workbench launcher" width="900" />
+  <img src="assets/readme/launcher_screenshot.png" alt="Workbench launcher" width="900" />
 </p>
 
 ---
