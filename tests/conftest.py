@@ -19,3 +19,5 @@ def _isolate_local_state(tmp_path_factory, monkeypatch):
     base = tmp_path_factory.mktemp("isolated_state")
     monkeypatch.setattr(settings, "data_dir", base / "data")
     monkeypatch.setattr(settings, "reports_dir", base / "reports")
+    monkeypatch.delenv("OPENROUTER_API_KEY", raising=False)
+    monkeypatch.setenv("MSU_LLM_SKIP_DOTENV", "1")
