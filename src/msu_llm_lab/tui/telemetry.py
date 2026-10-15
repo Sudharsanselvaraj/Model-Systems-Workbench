@@ -104,14 +104,30 @@ class LogBuffer:
     def __init__(self, max_entries: int = 100, max_size: Optional[int] = None) -> None:
         capacity = max_size if max_size is not None else max_entries
         self.entries: Deque[Tuple[str, str, str]] = deque(maxlen=capacity)
-        # Pre-populate startup logs matching mockup
+        # Startup entries are real facts read at launch (never mock-up text); anything unavailable is simply omitted.
         now = datetime.now().strftime("%H:%M:%S")
-        self.add_log("INFO", "Workbench initialized (dry-run mode)", now)
-        self.add_log("INFO", "Loaded 5 model candidates (unverified)", now)
-        self.add_log("INFO", "Budget policy: $10.00 total / $2.00 pilot", now)
-        self.add_log("INFO", "Database: SQLite (WAL mode)", now)
-        self.add_log("INFO", "No inference runs yet", now)
-        self.add_log("WARN", "Live provider validation pending (Step 2)", now)
+        self.add_log("INFO", "Workbench initialized (dry-run mode; no live requests from this screen)", now)
+        try:
+            from msu_llm_lab.models.registry import roster_status
+            rows = roster_status()
+            ready = sum(r["readiness"] == "READY" for r in rows)
+            smoke = sum(r["readiness"] == "SMOKE_READY" for r in rows)
+            self.add_log("INFO", f"Roster: {len(rows)} participants ({ready} ready, {smoke} smoke-ready, {len(rows) - ready - smoke} blocked)", now)
+            self.add_log("WARN", "No provider data policy is verified: student-derived data stays blocked", now)
+        except Exception:
+            pass
+        try:
+            from msu_llm_lab.core.config import settings
+            self.add_log("INFO", f"Budget policy: ${settings.budget.total_budget_usd:.2f} total / ${settings.budget.pilot_budget_usd:.2f} pilot", now)
+            from msu_llm_lab.storage.db import DatabaseManager
+            import sqlite3
+            db = DatabaseManager()
+            db.init_db()
+            with sqlite3.connect(str(db.db_path)) as c:
+                runs, live = c.execute("SELECT COUNT(*), COALESCE(SUM(CASE WHEN is_dry_run = 0 THEN 1 ELSE 0 END), 0) FROM evaluation_runs").fetchone()
+            self.add_log("INFO", f"Database: SQLite WAL; {runs} recorded runs ({live} live)", now)
+        except Exception:
+            pass
 
     def add_log(self, level: str, message: str, timestamp: str = "") -> None:
         ts = timestamp or datetime.now().strftime("%H:%M:%S")
