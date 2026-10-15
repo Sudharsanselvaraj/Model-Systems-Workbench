@@ -425,6 +425,19 @@ def estimate_permitted(model_id: str) -> bool:
             and r.route_output_price_per_1m_usd.status == FactStatus.VERIFIED_PRIMARY)
 
 
+OPENROUTER_COST_UNIT = unknown(
+    "OpenRouter's usage-accounting docs call `usage.cost` 'cost in credits' and never define a credit; its contact page says credits are USD-denominated "
+    "but no 1:1 ratio is stated (https://openrouter.ai/docs/guides/guides/usage-accounting). Until the ratio is verified (for example by comparing a "
+    "returned cost with the dashboard balance), the native value is preserved but never booked as USD."
+)
+NATIVE_COST_UNIT_LABEL = "OPENROUTER_CREDITS_USD_RATE_UNVERIFIED"
+
+
+def provider_cost_is_usd() -> bool:
+    """True only when the unit of provider-reported `usage.cost` has been verified as USD."""
+    return OPENROUTER_COST_UNIT.status == FactStatus.VERIFIED_PRIMARY
+
+
 def get_record(key: str) -> ModelRecord:
     try:
         return REGISTRY[key]
