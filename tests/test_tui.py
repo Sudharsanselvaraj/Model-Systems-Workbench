@@ -167,7 +167,7 @@ def test_panel_renderers():
     header = build_top_header()
     console.print(header)
     assert "MSU" in console.file.getvalue()
-    assert "LLM INFERENCE WORKBENCH" in console.file.getvalue()
+    assert "LLM WORKBENCH" in console.file.getvalue()
 
     # 2. Navigation panel
     console.file = io.StringIO()
@@ -263,6 +263,7 @@ def test_workbench_tui_btop_layout():
     out_buf = io.StringIO()
     console = Console(file=out_buf, force_terminal=False, width=120, height=36)
     app_tui = WorkbenchTUI(console=console)
+    app_tui.show_roster = False  # this test exercises the legacy planning catalogue
     app_tui.refresh_data()
 
     layout = app_tui.build_layout()
@@ -280,7 +281,7 @@ def test_workbench_tui_btop_layout():
     console.print(layout)
     output = out_buf.getvalue()
     assert "MSU" in output
-    assert "LLM INFERENCE WORKBENCH" in output
+    assert "LLM WORKBENCH" in output
     assert "NAVIGATION" in output
     assert "SYSTEM RESOURCES" in output
     assert "MODEL CATALOGUE" in output
@@ -420,12 +421,12 @@ def test_cli_ui_and_interactive_invocation():
     """Verify CLI 'ui' and '--interactive' commands launch TUI without error."""
     res_ui = runner.invoke(app, ["ui"], env={"COLUMNS": "120", "LINES": "36"})
     assert res_ui.exit_code == 0
-    assert "LLM INFERENCE WORKBENCH" in res_ui.stdout
+    assert "LLM WORKBENCH" in res_ui.stdout
     assert "NAVIGATION" in res_ui.stdout
 
     res_inter = runner.invoke(app, ["--interactive"], env={"COLUMNS": "120", "LINES": "36"})
     assert res_inter.exit_code == 0
-    assert "LLM INFERENCE WORKBENCH" in res_inter.stdout
+    assert "LLM WORKBENCH" in res_inter.stdout
 
 
 def test_sidebar_up_down_and_enter_activation():
@@ -497,6 +498,7 @@ def test_three_way_focus_cycling_tab_and_arrows():
 def test_model_catalogue_navigation_and_details_sync():
     """Verify Up/Down in Model Catalogue updates model selection and inspector details."""
     app_tui = WorkbenchTUI()
+    app_tui.show_roster = False  # this test exercises the legacy planning catalogue
     app_tui.refresh_data()
     assert len(app_tui.candidates) >= 5
 
@@ -582,6 +584,7 @@ def test_command_input_isolation():
 def test_empty_catalogue_and_search_handling():
     """Verify empty search results and empty catalogue do not crash navigation."""
     app_tui = WorkbenchTUI()
+    app_tui.show_roster = False  # this test exercises the legacy planning catalogue
     app_tui.refresh_data()
 
     # 1. Search filter with no matches
@@ -867,9 +870,9 @@ def test_welcome_screen_render():
     output = buf.getvalue()
 
     assert "Welcome to MSU LLM Workbench" in output
-    assert "Corpus: 3,030 clean" in output
-    assert "Tests: 95 passed" in output
-    assert "Spend: $0.00 / $10 cap" in output
+    assert "Corpus:" in output and "Models:" in output and "API key:" in output and "Mode:" in output
+    assert "Spend: $" in output and "cap" in output
+    assert "Tests: 95 passed" not in output  # no hard-coded claims; every figure is read live or shown as n/a
     assert "Launch Full-Screen TUI Dashboard" in output
     assert "Run Decoupled RAG Benchmark" in output
     assert "Simulate vLLM Serving & Hardware Sizing" in output
