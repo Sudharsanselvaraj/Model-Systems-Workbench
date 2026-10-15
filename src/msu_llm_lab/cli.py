@@ -89,12 +89,8 @@ def handle_welcome_action(choice: int) -> None:
     elif choice == 3:
         benchmark_rag(retriever_mode="bm25", dry_run=True, top_k=3)
     elif choice == 4:
-        benchmark_rag(
-            model="google/gemini-3.5-flash-lite",
-            compare_with="anthropic/claude-haiku-5.5",
-            retriever_mode="bm25",
-            dry_run=True,
-        )
+        models_roster()
+        console.print("\n[dim]Next: msu-llm-lab api-preflight, then msu-llm-lab smoke-test (plan only until you add --live).[/dim]")
     elif choice == 5:
         trace_file = Path("data/traces/synthetic_langfuse_traces.json")
         if trace_file.exists():
@@ -1136,7 +1132,7 @@ def budget_status() -> None:
     service = BudgetService()
     status = service.get_status()
 
-    console.print(Panel("[bold cyan]MSU LLM Inference Workbench — Budget Status[/bold cyan]", expand=False))
+    console.print(Panel("[bold cyan]MSU LLM Workbench — Budget Status[/bold cyan]", expand=False))
     console.print("[yellow]NOTE: Ceilings below are local experiment tracking policies, NOT provider-enforced account limits.[/yellow]\n")
 
     table = Table(title="Spend & Policy Overview", show_header=True, header_style="bold magenta")
@@ -1211,7 +1207,7 @@ def models_list() -> None:
     """List all candidate models in the evaluation portfolio with status and pricing."""
     candidates = get_portfolio()
 
-    console.print(Panel("[bold cyan]MSU LLM Inference Workbench — Candidate Portfolio[/bold cyan]", expand=False))
+    console.print(Panel("[bold cyan]MSU LLM Workbench — Candidate Portfolio[/bold cyan]", expand=False))
     console.print(
         "[yellow]NOTE: Model IDs and pricing below are preliminary entries. "
         "They have NOT yet been validated against OpenRouter live API (scheduled for Step 2).[/yellow]\n"
@@ -1281,7 +1277,7 @@ def simulate_serving(
     ),
 ) -> None:
     """Simulate self-hosted vLLM inference serving, hardware sizing, concurrency ramp, and cost crossover."""
-    console.print(Panel("[bold cyan]MSU LLM Inference Workbench — vLLM Serving & Concurrency Simulation[/bold cyan]", expand=False))
+    console.print(Panel("[bold cyan]MSU LLM Workbench — vLLM Serving & Concurrency Simulation[/bold cyan]", expand=False))
 
     # 1. Resolve architecture, hardware, and precision
     model_arch = get_model_architecture(model_id)
