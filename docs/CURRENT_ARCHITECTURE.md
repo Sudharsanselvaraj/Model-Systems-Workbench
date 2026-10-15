@@ -1,6 +1,6 @@
 # MSU LLM Workbench — System Architecture (Phases 0–5 and classification readiness)
 
-> The dry-run provider engine, mock retrievers and the serving simulator (former Phase 6) were removed: the workbench now contains only real workflows. Classification components (contracts, Jev and chat adapters, runner, smoke test, data preparation) are documented in the README and `docs/DATASET_CLEANING.md`.
+> The dry-run provider engine, mock retrievers and the serving simulator (former Phase 6) were removed: the workbench now contains only real workflows. The dashboard is a read-only monitor over recorded request events, prediction records and approved labels (see `docs/LIVE_DASHBOARD.md`). Classification components (contracts, Jev and chat adapters, runner, smoke test, data preparation) are documented in the README and `docs/DATASET_CLEANING.md`.
 
 ```mermaid
 graph TB
