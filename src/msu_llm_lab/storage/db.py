@@ -20,6 +20,7 @@ CREATE TABLE IF NOT EXISTS budget_ledger (
     amount_usd TEXT NOT NULL,
     is_pilot INTEGER NOT NULL DEFAULT 1,
     is_preflight_estimate INTEGER NOT NULL DEFAULT 0,
+    is_simulated INTEGER NOT NULL DEFAULT 0,
     description TEXT NOT NULL
 );
 
@@ -93,10 +94,26 @@ class DatabaseManager:
         return conn
 
     def init_db(self) -> None:
-        """Idempotently initializes tables without modifying existing data."""
+        """Idempotently initializes tables. The only change to an existing ledger is the additive `is_simulated` migration."""
         with self.get_connection() as conn:
             conn.executescript(SCHEMA_SQL)
+            self._migrate_ledger(conn)
             conn.commit()
+
+    @staticmethod
+    def _migrate_ledger(conn: sqlite3.Connection) -> None:
+        """Separate simulated from actual spend in ledgers created before the column existed.
+
+        Legacy rows are marked simulated ONLY when the run they belong to is recorded as a dry run (evaluation_runs.is_dry_run = 1).
+        Rows with no such evidence stay counted as actual, which is the conservative choice for a spend ceiling.
+        """
+        cols = [r[1] for r in conn.execute("PRAGMA table_info(budget_ledger)").fetchall()]
+        if "is_simulated" not in cols:
+            conn.execute("ALTER TABLE budget_ledger ADD COLUMN is_simulated INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "UPDATE budget_ledger SET is_simulated = 1 WHERE is_simulated = 0 AND run_id IN "
+            "(SELECT run_id FROM evaluation_runs WHERE is_dry_run = 1)"
+        )
 
     def record_transaction(
         self,
@@ -109,6 +126,7 @@ class DatabaseManager:
         is_pilot: bool = True,
         is_preflight_estimate: bool = False,
         timestamp: Optional[str] = None,
+        is_simulated: bool = False,
     ) -> None:
         """Records a new entry in the budget ledger using exact integer micros and Decimal string."""
         if timestamp is None:
@@ -122,8 +140,8 @@ class DatabaseManager:
                 """
                 INSERT INTO budget_ledger (
                     transaction_id, timestamp, run_id, model_id, provider,
-                    amount_micros, amount_usd, is_pilot, is_preflight_estimate, description
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    amount_micros, amount_usd, is_pilot, is_preflight_estimate, is_simulated, description
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     transaction_id,
@@ -135,6 +153,7 @@ class DatabaseManager:
                     formatted_usd,
                     1 if is_pilot else 0,
                     1 if is_preflight_estimate else 0,
+                    1 if is_simulated else 0,
                     description,
                 ),
             )
@@ -143,16 +162,23 @@ class DatabaseManager:
     def get_cumulative_spend(self, include_estimates: bool = False) -> tuple[int, Decimal]:
         """Returns total historical spend as (micros, Decimal)."""
         with self.get_connection() as conn:
-            where_clause = "" if include_estimates else "WHERE is_preflight_estimate = 0"
+            where_clause = "WHERE is_simulated = 0" + ("" if include_estimates else " AND is_preflight_estimate = 0")
             cursor = conn.execute(f"SELECT COALESCE(SUM(amount_micros), 0) FROM budget_ledger {where_clause}")
             row = cursor.fetchone()
+            micros = row[0] if row else 0
+            return micros, Decimal(micros) / Decimal("1000000")
+
+    def get_simulated_spend(self) -> tuple[int, Decimal]:
+        """Returns spend recorded by dry-run simulations. It never counts against any ceiling."""
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT COALESCE(SUM(amount_micros), 0) FROM budget_ledger WHERE is_simulated = 1").fetchone()
             micros = row[0] if row else 0
             return micros, Decimal(micros) / Decimal("1000000")
 
     def get_pilot_spend(self, include_estimates: bool = False) -> tuple[int, Decimal]:
         """Returns spend attributed to pilot evaluation as (micros, Decimal)."""
         with self.get_connection() as conn:
-            where_clause = "WHERE is_pilot = 1"
+            where_clause = "WHERE is_pilot = 1 AND is_simulated = 0"
             if not include_estimates:
                 where_clause += " AND is_preflight_estimate = 0"
             cursor = conn.execute(f"SELECT COALESCE(SUM(amount_micros), 0) FROM budget_ledger {where_clause}")
@@ -166,7 +192,7 @@ class DatabaseManager:
             cursor = conn.execute(
                 """
                 SELECT transaction_id, timestamp, run_id, model_id, provider,
-                       amount_usd, amount_micros, is_pilot, is_preflight_estimate, description
+                       amount_usd, amount_micros, is_pilot, is_preflight_estimate, is_simulated, description
                 FROM budget_ledger
                 ORDER BY timestamp DESC
                 LIMIT ?
