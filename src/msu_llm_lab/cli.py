@@ -246,6 +246,484 @@ def models_roster() -> None:
     console.print(table)
 
 
+@app.command("export-traces")
+def export_traces_cmd(
+    fmt: str = typer.Option("zip", "--format", "-f", help="jsonl, csv or zip (zip = per-model files, comparison file and manifest)."),
+    model: List[str] = typer.Option([], "--model", "-m", help="Limit to a model key (repeatable)."),
+    run: List[str] = typer.Option([], "--run", "-r", help="Limit to a run id (repeatable)."),
+    task: Optional[str] = typer.Option(None, "--task", "-t", help="INTENT or LEAD."),
+    status: List[str] = typer.Option([], "--status", "-s", help="OK, INVALID_OUTPUT or ERROR (repeatable)."),
+    out_dir: Optional[Path] = typer.Option(None, "--out-dir", help="Destination folder (default: reports/exports)."),
+) -> None:
+    """Export stored trace records (redacted, local only). Reads the prediction store and event log; sends nothing; never overwrites."""
+    from msu_llm_lab.core.config import settings
+    from msu_llm_lab.models.registry import roster_status
+    from msu_llm_lab.observability.export import ExportError, ExportSelection, build_trace_rows, export_traces
+    from msu_llm_lab.observability.monitor import LiveMonitor
+
+    fmt_val = getattr(fmt, "default", fmt) if hasattr(fmt, "default") else fmt
+    task_val = getattr(task, "default", task) if hasattr(task, "default") else task
+    if task_val is not None and str(task_val).upper() not in ("INTENT", "LEAD"):
+        console.print("[bold red]--task must be INTENT or LEAD[/bold red]")
+        raise typer.Exit(code=1)
+    mon = LiveMonitor()
+    mon.poll()
+    preds, events, labels, frozen = mon.trace_inputs()
+    sel = ExportSelection(models=tuple(model) or None, runs=tuple(run) or None, task=str(task_val).upper() if task_val else None, statuses=tuple(status) or None)
+    ts = build_trace_rows(preds, events, labels, frozen, sel)
+    try:
+        res = export_traces(ts, sel, roster_status(), labels, str(fmt_val).lower(), out_dir or (settings.reports_dir / "exports"))
+    except ExportError as e:
+        console.print(f"[bold red]Export failed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(f"Wrote {res.path.resolve()}", markup=False)
+    console.print(f"records exported {res.n_exported}, skipped {res.n_skipped}, redacted {res.n_redacted}, missing telemetry {res.n_missing_telemetry}", markup=False)
+    for w in res.warnings:
+        console.print(f"WARNING: {w}", markup=False)
+
+
+@app.command("evaluation-report")
+def evaluation_report_cmd(
+    bench: str = typer.Option("bench-d0a763e4a920", "--bench", help="Benchmark id (folder under data/benchmarks)."),
+    bundle: Optional[Path] = typer.Option(None, "--bundle", help="Verified result bundle (default: reports/real_benchmark_<bench>-r4)."),
+    out_dir: Optional[Path] = typer.Option(None, "--out", help="Output folder (default: reports/evaluation_report_<bench>)."),
+    seed: int = typer.Option(20261015, "--seed", help="Bootstrap seed."),
+    redesign: bool = typer.Option(False, "--redesign", help="Also write the compact redesigned PDF/Markdown (needs an existing report in --out)."),
+) -> None:
+    """Offline evaluation report (PDF, Markdown, CSV/JSON, figures) from existing benchmark artifacts. No network, no inference, no spend; sources are read-only."""
+    try:
+        from msu_llm_lab.observability import evaluation_report as er
+        from msu_llm_lab.observability.evaluation_runner import generate
+    except ModuleNotFoundError as e:
+        console.print(f"Missing report dependency ({e.name}). Install them with: uv sync --extra report", markup=False)
+        raise typer.Exit(code=1)
+
+    cfg = er.Config(bench_id=bench, bench_dir=Path("data/benchmarks") / bench, seed=seed,
+                    bundle_dir=bundle or Path(f"reports/real_benchmark_{bench}-r4"), out_dir=out_dir or Path(f"reports/evaluation_report_{bench}"))
+    if redesign:
+        from msu_llm_lab.observability.evaluation_runner import generate_redesign
+
+        r2 = generate_redesign(cfg)
+        q = r2["quality"]
+        console.print(f"Wrote redesigned report in {r2['out'].resolve()}: {q['pages'][0]} -> {q['pages'][1]} pages; quality check {'PASS' if q['ok'] else 'FAIL'}", markup=False)
+        if not q["ok"]:
+            raise typer.Exit(code=1)
+        return
+    res = generate(cfg)
+    console.print(f"Wrote {res['out'].resolve()} ({res['pages']} flowables); verification {'PASS' if res['verification']['ok'] else 'FAIL'}", markup=False)
+    if not res["verification"]["ok"]:
+        for c in res["verification"]["checks"]:
+            if not c["ok"]:
+                console.print(f"FAILED: {c['check']} {c['detail']}", markup=False)
+        raise typer.Exit(code=1)
+
+
+real_app = typer.Typer(help="Authorized real-data benchmark: plan, run (typed approvals), status, report.")
+app.add_typer(real_app, name="real-benchmark")
+
+
+def _real_inputs(prep_dir: Path, session_policy: str, prompt_dir: Path, model: List[str], block_size: int, hard_cap: Optional[str], sampling: str = "stratified", inherit_from: Optional[str] = None, reserve: Optional[str] = None):
+    from decimal import Decimal, InvalidOperation
+
+    from msu_llm_lab.classification import benchmark as bm
+    from msu_llm_lab.classification.smoke import load_prompts
+    from msu_llm_lab.core.budget import BudgetService
+
+    try:
+        cap = Decimal(hard_cap) if hard_cap else None
+    except InvalidOperation:
+        console.print(f"[bold red]Invalid --hard-cap:[/bold red] {hard_cap}")
+        raise typer.Exit(code=1)
+    try:
+        loaded = bm.load_prep_cases(prep_dir, session_policy)
+        prompts = load_prompts(prompt_dir)
+        budget = BudgetService()
+        from msu_llm_lab.core.config import settings as _s
+        parent = None
+        if inherit_from:
+            import json as _json
+            pdir = bm.bench_dir(_s.data_dir / "benchmarks", inherit_from)
+            if not (pdir / "plan.json").exists():
+                raise bm.PlanError(f"no stored plan for {inherit_from}")
+            parent = (_json.loads((pdir / "plan.json").read_text()), bm.load_state(_s.data_dir / "benchmarks", inherit_from))
+        plan = bm.build_plan(loaded, prompts, budget, model_keys=model or None, block_size=block_size, hard_cap_usd=cap, sampling=sampling, parent=parent, reports_dir=_s.reports_dir,
+                             reserve_usd=Decimal(reserve) if reserve else None)
+    except (bm.PlanError, FileNotFoundError) as e:
+        console.print(f"[bold red]Cannot plan:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    return bm, loaded, prompts, budget, plan
+
+
+@real_app.command("plan")
+def real_plan(
+    prep_dir: Path = typer.Option(..., "--prep-dir", help="Prepared dataset folder (for example data/classification_prep/prep-v2)."),
+    session_policy: str = typer.Option(..., "--session-policy", help="2h or 30m. The choice is yours; neither is assumed."),
+    prompt_dir: Path = typer.Option(Path("."), "--prompt-dir"),
+    model: List[str] = typer.Option([], "--model", "-m", help="Participant keys; default is the whole roster."),
+    block_size: int = typer.Option(10, "--block-size", help="Cases per task in one block."),
+    hard_cap: Optional[str] = typer.Option(None, "--hard-cap", help="Hard cap in USD for this benchmark (never above the pilot ceiling)."),
+    sampling: str = typer.Option("stratified", "--sampling", help="stratified (variety first, then proportional) or hash."),
+    inherit_from: Optional[str] = typer.Option(None, "--inherit-from", help="Earlier bench id whose clean completed results are carried over (identical participants only)."),
+    reserve: Optional[str] = typer.Option(None, "--reserve", help="USD of the remaining ledger headroom kept out of the plan for retries and unresolved costs."),
+) -> None:
+    """Build and store the benchmark plan. Sends nothing, calls no provider, and prints no student text."""
+    from msu_llm_lab.core.config import settings
+
+    bm, _, _, _, plan = _real_inputs(prep_dir, session_policy, prompt_dir, model, block_size, hard_cap, sampling, inherit_from, reserve)
+    path = bm.save_plan(settings.data_dir / "benchmarks", plan)
+    for line in bm.render_plan(plan):
+        console.print(line, markup=False, highlight=False)
+    console.print(f"\nPlan stored: {path.resolve()}", markup=False)
+    console.print(f"Next: msu-llm-lab real-benchmark run --prep-dir {prep_dir} --session-policy {session_policy} --operator \"<your name>\"" + (f" --inherit-from {inherit_from}" if inherit_from else "") + (f" --reserve {reserve}" if reserve else "") + " --live", markup=False)
+    raise typer.Exit(code=2 if plan["blockers"] else 0)
+
+
+@real_app.command("run")
+def real_run(
+    prep_dir: Path = typer.Option(..., "--prep-dir"),
+    session_policy: str = typer.Option(..., "--session-policy"),
+    operator: str = typer.Option(..., "--operator", help="Your name, recorded in the authorization manifest."),
+    prompt_dir: Path = typer.Option(Path("."), "--prompt-dir"),
+    model: List[str] = typer.Option([], "--model", "-m"),
+    block_size: int = typer.Option(10, "--block-size"),
+    hard_cap: Optional[str] = typer.Option(None, "--hard-cap"),
+    max_blocks: Optional[int] = typer.Option(None, "--max-blocks", help="Stop after this many TOTAL blocks counted from the start of the plan (the plan has 222; resume later with a larger number)."),
+    sampling: str = typer.Option("stratified", "--sampling", help="Must match the stored plan."),
+    inherit_from: Optional[str] = typer.Option(None, "--inherit-from", help="Must match the stored plan."),
+    reserve: Optional[str] = typer.Option(None, "--reserve", help="Must match the stored plan."),
+    live: bool = typer.Option(False, "--live", help="Send the planned requests. Needs the two interactive typed approvals."),
+) -> None:
+    """Execute (or resume) the benchmark. Re-derives the plan, then needs typed live approval AND typed real-data authorization."""
+    from msu_llm_lab.classification import realdata
+    from msu_llm_lab.classification.dataprep import code_fingerprint
+    from msu_llm_lab.core.config import load_project_env, settings
+    from msu_llm_lab.core.live_guard import confirm_live_run
+    from msu_llm_lab.providers.base import LiveNotAuthorizedError
+
+    load_project_env()
+    bm, loaded, prompts, budget, plan = _real_inputs(prep_dir, session_policy, prompt_dir, model, block_size, hard_cap, sampling, inherit_from, reserve)
+    root = settings.data_dir / "benchmarks"
+    saved = bm.bench_dir(root, plan["bench_id"]) / "plan.json"
+    if not saved.exists():
+        console.print("[bold red]This exact plan was never stored.[/bold red] Run `real-benchmark plan` first and review it.")
+        raise typer.Exit(code=1)
+    for line in bm.render_plan(plan):
+        console.print(line, markup=False, highlight=False)
+    if not live:
+        console.print("\nPlan only: nothing was sent. Re-run with --live to request the typed approvals.", markup=False)
+        raise typer.Exit(code=2 if plan["blockers"] else 0)
+    if plan["blockers"]:
+        console.print("[bold red]Live run refused:[/bold red] the plan is blocked.")
+        raise typer.Exit(code=1)
+    models = [p["model_id"] for p in plan["participants"]]
+    try:
+        live_auth = confirm_live_run(models, ["Approve exactly this plan by typing the phrase below."], echo=lambda line: console.print(line, markup=False, highlight=False),
+                                     plan_fingerprint=plan["fingerprint"])
+        auth = realdata.confirm_real_data(
+            dataset_version=plan["dataset"]["version"], session_policy=session_policy, models=models,
+            routes={p["model_id"]: (p["route"]["pinned_tag"] or "none") for p in plan["participants"]},
+            tasks=sorted({t for p in plan["participants"] for t in p["tasks"]}), plan_fingerprint=plan["fingerprint"], cost_ceiling_usd=plan["limits"]["hard_cap_usd"],
+            provider_policy_status={p["model_id"]: p["data_handling"]["data_policy"] for p in plan["participants"]}, recipients=plan["recipients"],
+            operator=operator, echo=lambda line: console.print(line, markup=False, highlight=False))
+    except LiveNotAuthorizedError as e:
+        console.print(f"[bold red]Live run refused:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    from msu_llm_lab.classification.smoke import build_smoke_adapters
+
+    bm.write_manifest(root, plan, auth, live_auth, code_fingerprint())
+    adapters = build_smoke_adapters([p["key"] for p in plan["participants"]], bm.STAGE)
+    try:
+        res = bm.execute(plan, loaded, prompts, auth, live_auth, adapters, budget, root=root, reports_dir=settings.reports_dir, max_blocks=max_blocks,
+                         progress=lambda m: console.print(m, markup=False))
+    except KeyboardInterrupt:
+        console.print("Interrupted. Progress is checkpointed; re-run the same command to resume.", markup=False)
+        raise typer.Exit(code=130)
+    except Exception as e:
+        console.print(f"[bold red]Benchmark stopped:[/bold red] {type(e).__name__}: {e}")
+        raise typer.Exit(code=1)
+    total = plan["ordering"]["n_blocks"]
+    console.print(f"\nblocks completed {res.blocks_completed} of {total}   guard cost ${res.spent_guard_usd}   halted: {res.halted or 'no'}", markup=False)
+    for m, why in res.quarantined.items():
+        console.print(f"QUARANTINED {m}: {why}", markup=False)
+    if res.blocks_completed < total or res.quarantined:
+        console.print("PARTIAL BENCHMARK: not every planned case/participant completed. Run `real-benchmark report` for exact coverage.", markup=False)
+        raise typer.Exit(code=3)
+    console.print("All planned blocks completed. Run `real-benchmark report`.", markup=False)
+
+
+@real_app.command("status")
+def real_status(bench_id: Optional[str] = typer.Argument(None)) -> None:
+    """Show stored benchmark plans and their checkpoint state (no network)."""
+    import json
+
+    from msu_llm_lab.core.config import settings
+
+    root = settings.data_dir / "benchmarks"
+    dirs = sorted(p for p in root.glob("bench-*") if p.is_dir()) if root.exists() else []
+    if bench_id:
+        dirs = [root / bench_id]
+    if not dirs:
+        console.print("No benchmark plans stored.", markup=False)
+        return
+    for d in dirs:
+        plan = json.loads((d / "plan.json").read_text()) if (d / "plan.json").exists() else {}
+        st = json.loads((d / "state.json").read_text()) if (d / "state.json").exists() else {}
+        console.print(f"{d.name}  dataset {plan.get('dataset', {}).get('version')}  blocks {st.get('blocks_completed', 0)}/{plan.get('ordering', {}).get('n_blocks')}  "
+                      f"halted: {st.get('halted') or 'no'}  quarantined: {list(st.get('quarantined', {})) or 'none'}", markup=False)
+
+
+annotate_app = typer.Typer(help="Independent annotation, adjudication, approval and freezing of ground-truth labels (local files only).")
+app.add_typer(annotate_app, name="annotate")
+
+
+def _annotation_ctx(prep_dir: Path, session_policy: str):
+    from msu_llm_lab.classification import annotation as an, benchmark as bm
+    try:
+        loaded = bm.load_prep_cases(prep_dir, session_policy)
+    except bm.PlanError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    return an, loaded
+
+
+@annotate_app.command("queue")
+def annotate_queue(prep_dir: Path = typer.Option(..., "--prep-dir"), session_policy: str = typer.Option(..., "--session-policy"),
+                   task: str = typer.Option(..., "--task", help="INTENT or LEAD."), limit: Optional[int] = typer.Option(None, "--limit")) -> None:
+    """Write the deterministic review queue (redacted text, no labels, no predictions). Local, git-ignored; never sent anywhere."""
+    from msu_llm_lab.classification.records import Task
+    an, loaded = _annotation_ctx(prep_dir, session_policy)
+    try:
+        path = an.write_queue(prep_dir, loaded, Task(task.upper()), limit)
+    except (an.AnnotationError, ValueError) as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    console.print(f"Review queue written: {path.resolve()} (contains redacted student text: keep it local)", markup=False)
+
+
+@annotate_app.command("submit")
+def annotate_submit(prep_dir: Path = typer.Option(..., "--prep-dir"), session_policy: str = typer.Option(..., "--session-policy"),
+                    task: str = typer.Option(..., "--task"), reviewer: str = typer.Option(..., "--reviewer"),
+                    case: Optional[str] = typer.Option(None, "--case"), label: Optional[str] = typer.Option(None, "--label"),
+                    file: Optional[Path] = typer.Option(None, "--file", help="JSONL lines {\"case_id\": ..., \"label\": ...} for bulk submission."),
+                    note: str = typer.Option("", "--note")) -> None:
+    """Record one reviewer's label (or a JSONL batch). A reviewer never sees another reviewer's label."""
+    import json
+    an, loaded = _annotation_ctx(prep_dir, session_policy)
+    valid = an.eligible_case_ids(loaded)
+    pairs = []
+    if file:
+        pairs = [(d["case_id"], str(d["label"])) for d in (json.loads(l) for l in file.read_text().splitlines() if l.strip())]
+    elif case and label is not None:
+        pairs = [(case, label)]
+    else:
+        console.print("[bold red]Give --case and --label, or --file.[/bold red]")
+        raise typer.Exit(code=1)
+    try:
+        for cid, lab in pairs:
+            an.submit(prep_dir, case_id=cid, task=task.upper(), label=lab, reviewer=reviewer, valid_ids=valid, note=note)
+    except an.AnnotationError as e:
+        console.print(f"[bold red]Stopped:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(f"Recorded {len(pairs)} annotation(s) by {reviewer}.", markup=False)
+
+
+@annotate_app.command("template")
+def annotate_template(prep_dir: Path = typer.Option(..., "--prep-dir"), session_policy: str = typer.Option(..., "--session-policy"),
+                      blocks: int = typer.Option(..., "--blocks", help="How many benchmark blocks of sampled cases the templates cover."),
+                      block_size: int = typer.Option(10, "--block-size"), sampling: str = typer.Option("stratified", "--sampling")) -> None:
+    """Write INTENT and LEAD review templates (opaque ids and metadata only; no text, no predictions). Never overwrites."""
+    from msu_llm_lab.observability import annotation_templates as at
+    an, loaded = _annotation_ctx(prep_dir, session_policy)
+    try:
+        paths = at.write_templates(prep_dir, loaded, sampling, blocks, block_size)
+    except an.AnnotationError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    for t, p in paths.items():
+        console.print(f"{t}: {p.resolve()}", markup=False)
+    console.print("Contains opaque ids only. Review text comes from `annotate queue` (local, redacted).", markup=False)
+
+
+@annotate_app.command("import-sheet")
+def annotate_import_sheet(prep_dir: Path = typer.Option(..., "--prep-dir"), session_policy: str = typer.Option(..., "--session-policy"),
+                          sheet: Path = typer.Option(..., "--sheet"), slot: int = typer.Option(..., "--slot", help="1 or 2: which reviewer column to import.")) -> None:
+    """Forward one reviewer's filled column to the annotation workflow (it creates annotation events only; it approves nothing)."""
+    from msu_llm_lab.observability import annotation_templates as at
+    an, loaded = _annotation_ctx(prep_dir, session_policy)
+    try:
+        n = at.import_sheet(sheet, prep_dir, an.eligible_case_ids(loaded), slot)
+    except (an.AnnotationError, OSError, KeyError) as e:
+        console.print(f"[bold red]Stopped:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(f"Imported {n} annotation(s) from reviewer slot {slot}.", markup=False)
+
+
+@annotate_app.command("status")
+def annotate_status(prep_dir: Path = typer.Option(..., "--prep-dir"), session_policy: str = typer.Option(..., "--session-policy")) -> None:
+    """Counts by workflow state (no labels, no text)."""
+    an, loaded = _annotation_ctx(prep_dir, session_policy)
+    for t, c in an.summary(prep_dir, an.eligible_case_ids(loaded)).items():
+        console.print(f"{t}: {c}", markup=False)
+    fm = an.frozen_matches_current(prep_dir)
+    console.print(f"freeze: {'never frozen' if fm is None else 'current labels match the latest freeze' if fm else 'LABELS CHANGED SINCE THE LATEST FREEZE'}", markup=False)
+
+
+@annotate_app.command("adjudicate")
+def annotate_adjudicate(prep_dir: Path = typer.Option(..., "--prep-dir"), task: str = typer.Option(..., "--task"), case: str = typer.Option(..., "--case"),
+                        label: str = typer.Option(..., "--label"), adjudicator: str = typer.Option(..., "--adjudicator"), note: str = typer.Option("", "--note")) -> None:
+    """A third reviewer settles a conflict between two independent annotations."""
+    from msu_llm_lab.classification import annotation as an
+    try:
+        an.adjudicate(prep_dir, case_id=case, task=task.upper(), label=label, adjudicator=adjudicator, note=note)
+    except an.AnnotationError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    console.print("Adjudication recorded.", markup=False)
+
+
+@annotate_app.command("approve")
+def annotate_approve(prep_dir: Path = typer.Option(..., "--prep-dir"), approver: str = typer.Option(..., "--approver"),
+                     all_ready: bool = typer.Option(False, "--all-ready", help="Approve every AGREED/ADJUDICATED case (needs the typed confirmation)."),
+                     task: Optional[str] = typer.Option(None, "--task"), case: Optional[str] = typer.Option(None, "--case")) -> None:
+    """Explicitly approve ready cases. Never automatic: bulk approval needs an interactive typed phrase."""
+    import sys
+    from msu_llm_lab.classification import annotation as an
+    ready = [s for s in an.case_states(prep_dir).values() if s.proposed is not None and s.state != "APPROVED"]
+    try:
+        if all_ready:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                console.print("[bold red]Bulk approval needs an interactive terminal.[/bold red]")
+                raise typer.Exit(code=1)
+            phrase = f"APPROVE {len(ready)} LABELS"
+            console.print(f"{len(ready)} case(s) are ready (AGREED or ADJUDICATED). Type exactly: {phrase}", markup=False)
+            if typer.prompt("Confirmation", default="", show_default=False).strip() != phrase:
+                console.print("Confirmation did not match; nothing approved.", markup=False)
+                raise typer.Exit(code=1)
+            rows = an.approve(prep_dir, approver=approver, all_ready=True)
+        elif task and case:
+            rows = an.approve(prep_dir, approver=approver, case_ids=[(task.upper(), case)])
+        else:
+            console.print("[bold red]Give --task and --case, or --all-ready.[/bold red]")
+            raise typer.Exit(code=1)
+    except an.AnnotationError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    console.print(f"Approved {len(rows)} label(s) as {approver}.", markup=False)
+
+
+@annotate_app.command("revoke")
+def annotate_revoke(prep_dir: Path = typer.Option(..., "--prep-dir"), task: str = typer.Option(..., "--task"), case: str = typer.Option(..., "--case"),
+                    by: str = typer.Option(..., "--by"), reason: str = typer.Option(..., "--reason")) -> None:
+    """Withdraw an approval (the history stays)."""
+    from msu_llm_lab.classification import annotation as an
+    try:
+        an.revoke(prep_dir, task=task.upper(), case_id=case, by=by, reason=reason)
+    except an.AnnotationError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    console.print("Approval withdrawn.", markup=False)
+
+
+@annotate_app.command("freeze")
+def annotate_freeze(prep_dir: Path = typer.Option(..., "--prep-dir"), by: str = typer.Option(..., "--by")) -> None:
+    """Hash and record the current approved label set so a label-backed benchmark can prove which labels it used."""
+    import json
+    from msu_llm_lab.classification import annotation as an
+    try:
+        manifest = json.loads((prep_dir / "manifest.json").read_text())
+        path = an.freeze(prep_dir, by=by, dataset_version=manifest.get("prep_version", prep_dir.name))
+    except (an.AnnotationError, OSError) as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    console.print(f"Frozen: {path.resolve()}", markup=False)
+
+
+@real_app.command("verify")
+def real_verify(bundle: Path = typer.Argument(..., help="A bundle folder such as reports/real_benchmark_bench-xxxx-r3"),
+                prep_dir: Optional[Path] = typer.Option(None, "--prep-dir"), session_policy: Optional[str] = typer.Option(None, "--session-policy")) -> None:
+    """Offline integrity check of a written bundle (hashes, counts, predictions, cost provenance, narrative vs CSV). Writes verification_report.md/json into it."""
+    import json
+
+    from msu_llm_lab.classification import benchmark as bm
+    from msu_llm_lab.observability import bundle_verify as bv
+    from msu_llm_lab.classification.records import Task
+
+    executed = None
+    if prep_dir and session_policy:
+        man = json.loads((bundle / "benchmark_manifest.json").read_text())
+        loaded = bm.load_prep_cases(prep_dir, session_policy)
+        done = man["blocks"]["completed"]
+        bs = man["ordering"]["block_size"]
+        executed = {t.value: {c.case_id for c in bm.order_cases(loaded, t, man["ordering"]["sampling"])[: done * bs]} for t in (Task.INTENT, Task.LEAD)}
+    v = bv.verify_bundle(bundle, executed)
+    (bundle / "verification_report.json").write_text(json.dumps(v, indent=2) + "\n")
+    (bundle / "verification_report.md").write_text(bv.verification_markdown(v))
+    for c in v["checks"]:
+        console.print(f"{'PASS' if c['ok'] else 'FAIL'}  {c['check']}  {c['detail'][:140]}", markup=False)
+    console.print(f"\nVerification {'PASSED' if v['ok'] else 'FAILED'}: {v['n_checks']} checks, {len(v['failed'])} failed. Wrote {bundle.resolve()}/verification_report.md", markup=False)
+    raise typer.Exit(code=0 if v["ok"] else 1)
+
+
+@real_app.command("report")
+def real_report(bench_id: str = typer.Argument(..., help="For example bench-0123456789ab."),
+                prep_dir: Optional[Path] = typer.Option(None, "--prep-dir", help="For approved labels and unattempted-case lists (read-only)."),
+                session_policy: Optional[str] = typer.Option(None, "--session-policy", help="With --prep-dir: also list unattempted cases of the executed blocks."),
+                export: bool = typer.Option(True, "--export/--no-export", help="Also write the redacted ZIP trace export.")) -> None:
+    """Write the benchmark report (markdown + json) and a redacted trace export from persisted outcomes. No network, no student text."""
+    import json
+
+    from msu_llm_lab.classification import benchmark as bm, benchmark_report as br, realdata
+    from msu_llm_lab.core.config import settings
+    from msu_llm_lab.models.registry import roster_status
+    from msu_llm_lab.observability.events import EventStore
+    from msu_llm_lab.observability.export import ExportSelection, build_trace_rows, export_traces
+    from msu_llm_lab.observability.monitor import LiveMonitor
+
+    d = bm.bench_dir(settings.data_dir / "benchmarks", bench_id)
+    if not (d / "plan.json").exists():
+        console.print(f"[bold red]No stored plan for {bench_id}.[/bold red]")
+        raise typer.Exit(code=1)
+    plan = json.loads((d / "plan.json").read_text())
+    state = bm.load_state(settings.data_dir / "benchmarks", bench_id)
+    report = br.build_report(plan, state, settings.reports_dir, EventStore(), prep_dir)
+    out_md, out_json = settings.reports_dir / f"real_benchmark_{bench_id}.md", settings.reports_dir / f"real_benchmark_{bench_id}.json"
+    realdata.write_json_atomic(out_json, report)
+    out_md.write_text(br.render_markdown(report), encoding="utf-8")
+    console.print(f"Report: {out_md.resolve()}", markup=False)
+    console.print(f"Machine-readable: {out_json.resolve()}", markup=False)
+    console.print(f"State: {report['benchmark_state']}   participants: {report['completion_counts']}", markup=False)
+    loaded = None
+    if prep_dir and session_policy:
+        try:
+            loaded = bm.load_prep_cases(prep_dir, session_policy)
+        except bm.PlanError as e:
+            console.print(f"[yellow]Unattempted-case list skipped: {e}[/yellow]")
+    from msu_llm_lab.core.budget import BudgetService
+    st = BudgetService().get_status()
+    ledger = {"counted_against_caps_usd": str(st.cumulative_spend_usd), "pilot_spent_usd": str(st.pilot_spend_usd), "pilot_remaining_usd": str(st.remaining_pilot_usd),
+              "total_remaining_usd": str(st.remaining_total_usd), "spend_by_basis": {k: str(v) for k, v in st.spend_by_basis.items()}, "unresolved_entries": st.unresolved_spend_count,
+              "legacy_simulated_usd_not_counted": str(st.simulated_spend_usd)}
+    prompts = None
+    try:
+        from msu_llm_lab.classification.smoke import load_prompts
+        prompts = load_prompts(Path("."))
+    except FileNotFoundError:
+        pass
+    bundle = br.write_bundle(plan, state, settings.reports_dir, EventStore(), roster_status(), settings.reports_dir, prep_dir, loaded, d / "manifest.json", ledger=ledger, prompts=prompts)
+    console.print(f"Comparison bundle: {bundle['dir'].resolve()}  ({', '.join(br.BUNDLE_FILES)})", markup=False)
+    if export:
+        mon = LiveMonitor()
+        mon.poll()
+        preds, events, labels, frozen = mon.trace_inputs()
+        runs = tuple(sorted({p.run_id for p in preds if p.run_id.startswith(bench_id + "-")}))
+        sel = ExportSelection(runs=runs or None)
+        if not runs:
+            console.print("No persisted records for this benchmark yet: trace export skipped (no placeholder is created).", markup=False)
+            return
+        res = export_traces(build_trace_rows(preds, events, labels, frozen, sel), sel, roster_status(), labels, "zip", settings.reports_dir / "exports")
+        console.print(f"Trace export (redacted by default): {res.path.resolve()}  records {res.n_exported}", markup=False)
+
+
 @app.command("classification-data-status")
 def classification_data_status() -> None:
     """Show what local dataset preparation exists (counts only; no student text)."""
@@ -277,8 +755,10 @@ def api_preflight() -> None:
     import os
     import sys
 
+    from msu_llm_lab.core.config import get_api_key_source, load_project_env
     from msu_llm_lab.models.registry import roster_status
 
+    load_project_env()
     raw = os.environ.get("OPENROUTER_API_KEY")
     present = bool(raw and raw.strip())
     odd_whitespace = bool(raw) and raw != raw.strip()
@@ -289,7 +769,7 @@ def api_preflight() -> None:
     if present:
         table.add_row("Key has leading/trailing whitespace", "[yellow]yes (fix it)[/yellow]" if odd_whitespace else "no")
     table.add_row("Interactive terminal (needed for live approval)", "yes" if (sys.stdin.isatty() and sys.stdout.isatty()) else "[yellow]no: live runs would be refused[/yellow]")
-    table.add_row("Source of the key", "environment variable only (no .env loader exists)")
+    table.add_row("Source of the key", get_api_key_source())
     table.add_row("Network used by this command", "none")
     rows = roster_status()
     table.add_row("Participants READY / SMOKE_READY / BLOCKED",
@@ -297,7 +777,7 @@ def api_preflight() -> None:
     table.add_row("Student-derived data allowed to any provider", "[bold red]no[/bold red] (no data policy is verified)")
     console.print(table)
     if not present:
-        console.print("Set it in your shell before a live run, for example: export OPENROUTER_API_KEY=...  (never paste it into chat or commit it)", markup=False)
+        console.print("Set it in your shell (e.g. export OPENROUTER_API_KEY=...) or in .env before a live run (never paste it into chat or commit it)", markup=False)
     raise typer.Exit(code=0 if present else 1)
 
 
@@ -306,9 +786,26 @@ def prepare_classification_data(
     source: Path = typer.Option(Path("september_to_october.csv"), "--source", help="Historical export (read only)."),
     out_dir: Path = typer.Option(Path("data/classification_prep/prep-v1"), "--out-dir", help="Local, git-ignored output folder."),
     new_version: bool = typer.Option(False, "--new-version", help="If the folder already has content, write a new sibling version (prep-v1-r2, ...) instead of refusing."),
+    prompt_salt: bool = typer.Option(False, "--prompt-salt", help="Ask for the private pseudonymization secret with hidden input (asked twice; never echoed, stored or printed)."),
+    allow_public_salt: bool = typer.Option(False, "--allow-public-salt", help="Permit the legacy public salt (pseudonyms are then linkable by anyone holding the export)."),
 ) -> None:
     """Clean, redact and prepare the historical export for human review. Local only; prints aggregates, never student text."""
+    import os
+    from getpass import getpass
+
     from msu_llm_lab.classification import dataprep
+
+    if prompt_salt:
+        first, second = getpass("Private pseudonymization secret (hidden): "), getpass("Repeat the secret (hidden): ")
+        if first != second or len(first.strip()) < 12:
+            console.print("[bold red]Secrets differ or are shorter than 12 characters; nothing was written.[/bold red]")
+            raise typer.Exit(code=1)
+        os.environ[dataprep.SALT_ENV] = first.strip()
+        del first, second
+    if not os.environ.get(dataprep.SALT_ENV, "").strip() and not allow_public_salt:
+        console.print("[bold red]No private salt.[/bold red] Re-run with --prompt-salt (hidden input) or export MSU_PREP_SALT in your shell; "
+                      "--allow-public-salt keeps the linkable legacy salt.")
+        raise typer.Exit(code=1)
 
     if not source.exists():
         console.print(f"[bold red]Source not found:[/bold red] {source}")
@@ -705,6 +1202,11 @@ def run_benchmark(
     from msu_llm_lab.evaluation.runner import BenchmarkRunner
     from msu_llm_lab.schemas.evaluation import DatasetSplit
 
+    model_id = getattr(model_id, "default", model_id) if hasattr(model_id, "default") else model_id
+    dataset_path_val = getattr(dataset_path, "default", dataset_path) if hasattr(dataset_path, "default") else dataset_path
+    dataset_path = Path(dataset_path_val) if not isinstance(dataset_path_val, Path) else dataset_path_val
+    live = getattr(live, "default", live) if hasattr(live, "default") else live
+
     console.print(Panel(
         f"[bold cyan]MSU Model Evaluation Benchmark[/bold cyan]\n"
         f"Target Model:  [bold white]{model_id}[/bold white]\n"
@@ -716,12 +1218,14 @@ def run_benchmark(
         console.print("Nothing was sent. Add --live to request typed approval for real requests.", markup=False)
         raise typer.Exit(code=2)
 
+    split_val = getattr(split, "default", split) if hasattr(split, "default") else split
+    split_str = str(split_val).strip()
     target_split = None
-    if split.upper() != "ALL":
+    if split_str.upper() != "ALL":
         try:
-            target_split = DatasetSplit(split.upper())
+            target_split = DatasetSplit(split_str.upper())
         except ValueError:
-            console.print(f"[bold red]Error:[/bold red] Invalid split '{split}'. Choose TEST, DEV, or ALL.")
+            console.print(f"[bold red]Error:[/bold red] Invalid split '{split_str}'. Choose TEST, DEV, or ALL.")
             raise typer.Exit(code=1)
 
     live_auth = _require_live_confirmation([model_id], dataset_path.name)
@@ -893,9 +1397,16 @@ def benchmark_rag(
     from msu_llm_lab.rag.retriever import KeywordBM25Retriever
     from msu_llm_lab.rag.runner import RAGBenchmarkRunner
     from msu_llm_lab.schemas.evaluation import DatasetSplit
-
-    split_clean = split.strip().upper()
+    model = getattr(model, "default", model) if hasattr(model, "default") else model
+    dataset_val = getattr(dataset, "default", dataset) if hasattr(dataset, "default") else dataset
+    dataset = Path(dataset_val) if not isinstance(dataset_val, Path) else dataset_val
+    split_val = getattr(split, "default", split) if hasattr(split, "default") else split
+    split_clean = str(split_val).strip().upper()
     split_enum = DatasetSplit(split_clean) if split_clean in DatasetSplit.__members__ else DatasetSplit.UNASSIGNED
+    live = getattr(live, "default", live) if hasattr(live, "default") else live
+    top_k = getattr(top_k, "default", top_k) if hasattr(top_k, "default") else top_k
+    compare_with = getattr(compare_with, "default", compare_with) if hasattr(compare_with, "default") else compare_with
+    exclude_defective = getattr(exclude_defective, "default", exclude_defective) if hasattr(exclude_defective, "default") else exclude_defective
 
     # Real retrieval only: a BM25 index over the audited knowledge-base records. There is no mock or answer-leaking retriever.
     gen_kb_path = Path("data/audit/parsed_records_general_kb.jsonl")
@@ -1212,6 +1723,68 @@ def budget_purge_simulated() -> None:
     console.print(f"Backup of the previous database: {result['backup'] or 'none (no database file)'}", markup=False)
 
 
+@budget_app.command(name="audit")
+def budget_audit_cmd() -> None:
+    """Reconcile the ledger with the stored results (read-only). Explains ledger total versus per-plan guard cost. Writes reports/budget_reconciliation_*.md/.json."""
+    import json
+    from datetime import datetime, timezone
+
+    from msu_llm_lab.core.config import settings
+    from msu_llm_lab.observability import budget_audit as ba
+
+    service = BudgetService()
+    service.db.init_db()
+    a = ba.audit(service.db.db_path, service.policy, settings.reports_dir, settings.data_dir / "benchmarks")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    md, js = settings.reports_dir / f"budget_reconciliation_{stamp}.md", settings.reports_dir / f"budget_reconciliation_{stamp}.json"
+    settings.reports_dir.mkdir(parents=True, exist_ok=True)
+    js.write_text(json.dumps(a, indent=2) + "\n")
+    md.write_text(ba.audit_markdown(a))
+    console.print(f"Ledger counted: ${a['ledger_total_counted_usd']}  remaining total ${a['remaining_usd']['total']}  pilot ceiling ${a['ceilings_usd']['pilot']}  unresolved {a['unresolved_entries']}", markup=False)
+    for g in a["groups"]:
+        console.print(f"  {g['group']:<28}ledger ${g['ledger_usd']:<10} records ${g['records_recorded_cost_usd']:<10} guard ${g['guard_from_records_usd']:<10} ledger=records {g['ledger_equals_records']}", markup=False)
+    console.print(f"RECONCILED: {a['reconciled']}   report: {md.resolve()}", markup=False)
+    raise typer.Exit(code=0 if a["reconciled"] else 1)
+
+
+@budget_app.command(name="policy")
+def budget_policy_cmd() -> None:
+    """Show the effective ceilings and the audit trail of operator-authorized pilot-ceiling changes."""
+    from msu_llm_lab.core import budget_policy as bp
+    from msu_llm_lab.core.config import settings
+
+    eff = bp.effective_policy(settings.budget, settings.data_dir)
+    console.print(f"effective: total ${eff.total_budget_usd}  pilot ${eff.pilot_budget_usd}  per run ${eff.per_run_ceiling_usd}  per case ${eff.per_case_ceiling_usd}   (defaults: pilot ${settings.budget.pilot_budget_usd})", markup=False)
+    for h in bp.history(settings.data_dir):
+        console.print(f"  {h['at']}  {h['operator']}: pilot ${h['previous_pilot_budget_usd']} -> ${h['new_pilot_budget_usd']}  (total ${h['total_budget_usd']}; ledger counted ${h['ledger_total_spent_usd']} at the time)", markup=False)
+
+
+@budget_app.command(name="raise-pilot-ceiling")
+def budget_raise_pilot(to: str = typer.Option(..., "--to", help="New pilot ceiling in USD (never above the total lifetime ceiling)."),
+                       operator: str = typer.Option(..., "--operator", help="Your name, recorded in the audit trail.")) -> None:
+    """Operator-authorized pilot-ceiling change with an interactive typed phrase. The total, per-run and per-case ceilings and the ledger are untouched."""
+    from decimal import Decimal, InvalidOperation
+
+    from msu_llm_lab.core import budget_policy as bp
+    from msu_llm_lab.core.config import settings
+    from msu_llm_lab.providers.base import LiveNotAuthorizedError
+
+    try:
+        new = Decimal(to)
+    except InvalidOperation:
+        console.print(f"[bold red]Invalid amount:[/bold red] {to}")
+        raise typer.Exit(code=1)
+    service = BudgetService()
+    st = service.get_status()
+    try:
+        entry = bp.raise_pilot_ceiling(settings.data_dir, settings.budget, new, operator=operator, ledger_total_spent=st.cumulative_spend_usd, ledger_pilot_spent=st.pilot_spend_usd,
+                                       echo=lambda line: console.print(line, markup=False, highlight=False))
+    except (LiveNotAuthorizedError, bp.PolicyError) as e:
+        console.print(f"[bold red]Not changed:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(f"Pilot ceiling is now ${entry['new_pilot_budget_usd']} (recorded in {bp.policy_path(settings.data_dir)}). Total ${entry['total_budget_usd']}, per-run ${entry['per_run_ceiling_usd']}, per-case ${entry['per_case_ceiling_usd']} unchanged.", markup=False)
+
+
 @budget_app.command(name="status")
 def budget_status() -> None:
     """Display current spend ledger, remaining balances, and local policy ceilings."""
@@ -1277,8 +1850,11 @@ def budget_status() -> None:
         tx_table.add_column("Description", style="italic")
 
         for tx in status.recent_transactions:
-            tx_type = ("[yellow]ESTIMATE[/yellow]" if tx["is_preflight_estimate"]
-                       else "[dim]SIMULATED[/dim]" if tx.get("is_simulated") else "[bold green]ACTUAL[/bold green]")
+            basis = tx.get("cost_basis") or "UNSPECIFIED"
+            tx_type = ("[yellow]PRE-RUN ESTIMATE[/yellow]" if tx["is_preflight_estimate"] else "[dim]LEGACY SIMULATED[/dim]" if tx.get("is_simulated")
+                       else "[bold red]UNRESOLVED[/bold red]" if tx.get("is_unresolved")
+                       else "[bold green]ACTUAL[/bold green]" if basis in ("PROVIDER_REPORTED", "RECONCILED")
+                       else "[yellow]ESTIMATED[/yellow]" if basis == "ESTIMATED_FROM_CATALOG" else f"[dim]{basis}[/dim]")
             tx_table.add_row(
                 tx["timestamp"][:19].replace("T", " "),
                 tx["model_id"],
