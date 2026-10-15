@@ -53,11 +53,12 @@ class AdapterResult(BaseModel):
     model_latency_ms: Optional[float] = None             # provider-reported only
     attempts: int = Field(default=1, ge=1)
     retry_errors: List[str] = Field(default_factory=list)
+    native_cost: Optional[Decimal] = None                # provider usage.cost as received (credits); not booked as USD until the unit is verified
+    native_cost_unit: Optional[str] = None
     actual_cost_usd: Optional[Decimal] = None
     estimated_cost_usd: Optional[Decimal] = None
     cost_usd: Decimal = Decimal("0")
     cost_basis: Literal["PROVIDER_REPORTED", "ESTIMATED_FROM_CATALOG", "UNAVAILABLE"] = "UNAVAILABLE"
-    is_dry_run: bool = False
 
 
 class PredictionRecord(BaseModel):
@@ -95,13 +96,14 @@ class PredictionRecord(BaseModel):
     model_latency_ms: Optional[float] = None
     attempts: Optional[int] = None
     retry_errors: List[str] = Field(default_factory=list)
+    native_cost: Optional[Decimal] = None
+    native_cost_unit: Optional[str] = None
     actual_cost_usd: Optional[Decimal] = None
     estimated_cost_usd: Optional[Decimal] = None
     recorded_cost_usd: Optional[Decimal] = None
     cost_basis: Literal["PROVIDER_REPORTED", "ESTIMATED_FROM_CATALOG", "UNAVAILABLE"] = "UNAVAILABLE"
     error_type: Optional[str] = None
     error_message: Optional[str] = None
-    is_dry_run: Literal[False] = False
     is_ground_truth: Literal[False] = False
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
 
@@ -125,7 +127,8 @@ def record_from_result(
         native_confidence=result.native_confidence, confidence_source=result.confidence_source, yes_prob=result.yes_prob,
         prompt_tokens=result.prompt_tokens, completion_tokens=result.completion_tokens, usage_source=result.usage_source,
         latency_ms=result.latency_ms, attempt_latency_ms=result.attempt_latency_ms, model_latency_ms=result.model_latency_ms,
-        attempts=result.attempts, retry_errors=list(result.retry_errors), actual_cost_usd=result.actual_cost_usd,
+        attempts=result.attempts, retry_errors=list(result.retry_errors), native_cost=result.native_cost, native_cost_unit=result.native_cost_unit,
+        actual_cost_usd=result.actual_cost_usd,
         estimated_cost_usd=result.estimated_cost_usd,
         recorded_cost_usd=result.cost_usd if result.cost_basis != "UNAVAILABLE" else None, cost_basis=result.cost_basis,
     )
