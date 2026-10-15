@@ -62,6 +62,11 @@ _EMAIL = re.compile(r"[\w.+\-]+@[\w\-]+(?:\.[\w\-]+)+")
 _IC = re.compile(r"(?<!\d)\d{6}-?\d{2}-?\d{4}(?!\d)")
 _MY_MOBILE = re.compile(r"(?<![\w])(?:\+?60|0)\s?1\d(?:[\s\-]?\d){7,8}(?!\d)")
 _LONG_DIGITS = re.compile(r"(?<!\d)\+?\d[\d\s\-()]{7,18}\d(?!\d)")
+_PASSPORT = re.compile(r"(?<![A-Za-z0-9])[A-Z]\d{7,8}(?![A-Za-z0-9])")
+_NOT_NAMES = frozenset("""interested looking planning thinking currently from in not a an the applying wondering asking writing here new
+    still also just really very sorry glad happy confused worried currently student parent father mother""".split())
+_INTRO = re.compile(r"\b(?:I am|I'm|this is|my name is|nama saya|saya)\s+([A-Z][a-z]{2,}(?:\s+[A-Z][a-z]{2,}){0,2})\b")
+_RELATIVE_NAME = re.compile(r"(?i)\b(?:my (?:father|mother|dad|mum|son|daughter|brother|sister|child)(?:'s)? name(?: is)?|nama (?:ayah|ibu|anak)(?: saya)?)\s*:?\s+([A-Za-z'@\-]+(?:\s+[A-Za-z'@\-]+){0,2})")
 _NAME = re.compile(r"(?i)\b(my name is|nama saya|nama\s*:|name\s*:)\s+([A-Za-z'@.\-]+(?:\s+[A-Za-z'@.\-]+){0,2})")
 
 
@@ -86,6 +91,20 @@ def redact(text: str) -> Tuple[str, Counter]:
         counts["[NAME]"] += 1
         return f"{m.group(1)} [NAME]"
     out = _NAME.sub(name_repl, out)
+
+    def intro_repl(m):
+        words = m.group(1).split()
+        if words[0].lower() in _NOT_NAMES:
+            return m.group(0)
+        counts["[NAME]"] += 1
+        return m.group(0).replace(m.group(1), "[NAME]")
+    out = _INTRO.sub(intro_repl, out)
+
+    def rel_repl(m):
+        counts["[NAME]"] += 1
+        return m.group(0).replace(m.group(1), "[NAME]")
+    out = _RELATIVE_NAME.sub(rel_repl, out)
+    out = sub(_PASSPORT, "[ID_NUMBER]", out)
     return out, counts
 
 
@@ -524,7 +543,21 @@ def next_free_version_dir(base: Path) -> Path:
 
 
 def prepare(source: Path, out_dir: Path) -> Dict[str, Any]:
-    """Run the whole local pipeline and write artifacts. Returns the manifest (aggregates only)."""
+    """Run the whole local pipeline and write artifacts. Returns the manifest (aggregates only).
+
+    The preparation version recorded in every artifact is the output folder's name (prep-v1, prep-v1-r2, ...), so a new version is
+    never mistaken for the old one.
+    """
+    global PREP_VERSION
+    previous = PREP_VERSION
+    PREP_VERSION = Path(out_dir).name
+    try:
+        return _prepare(source, out_dir)
+    finally:
+        PREP_VERSION = previous
+
+
+def _prepare(source: Path, out_dir: Path) -> Dict[str, Any]:
     source, out_dir = Path(source), Path(out_dir)
     if out_dir.exists() and any(out_dir.iterdir()):
         hint = " It contains human annotations, which a rerun must never touch." if (out_dir / "annotations").exists() else ""
