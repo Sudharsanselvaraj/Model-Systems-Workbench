@@ -35,8 +35,24 @@ def test_blocked_participants_show_their_exact_reason(monkeypatch):
 
 def test_roster_command_toggles_the_view_without_disturbing_the_catalogue():
     tui = WorkbenchTUI(console=Console(file=StringIO(), width=200))
-    assert tui.show_roster is False
+    assert tui.show_roster is True  # the verified roster is the default home
+    tui.execute_command(":catalogue")
+    assert tui.show_roster is False and tui.nav_index == 0 and "legacy" in tui.feedback_message.lower()
     tui.execute_command(":roster")
     assert tui.show_roster is True and tui.nav_index == 0 and "roster" in tui.feedback_message.lower()
+    tui.execute_command(":catalogue")
     tui.execute_command(":models")
-    assert tui.show_roster is False and tui.nav_index == 0
+    assert tui.show_roster is True
+
+
+def test_roster_cursor_covers_all_ten_rows():
+    tui = WorkbenchTUI(console=Console(file=StringIO(), width=200))
+    tui.refresh_data()
+    tui.handle_key("ENTER")
+    for _ in range(30):
+        tui.handle_key("DOWN")
+    assert tui.model_cursor == 9
+    tui.execute_command(":catalogue")
+    tui.model_cursor = 99
+    tui._clamp_model_cursor()
+    assert tui.model_cursor == len(tui.get_filtered_candidates()) - 1
