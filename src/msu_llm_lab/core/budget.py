@@ -41,7 +41,10 @@ class BudgetService:
 
     def __init__(self, db: Optional[DatabaseManager] = None, policy: Optional[BudgetPolicy] = None):
         self.db = db or DatabaseManager()
-        self.policy = policy or settings.budget
+        if policy is None:
+            from msu_llm_lab.core.budget_policy import effective_policy
+            policy = effective_policy(settings.budget, settings.data_dir)   # a typed, audited pilot-ceiling override applies; nothing else changes
+        self.policy = policy
 
     def get_status(self) -> BudgetStatus:
         """Computes current budget status against configured local ceilings."""
