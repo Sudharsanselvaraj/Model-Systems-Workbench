@@ -9,11 +9,11 @@ from typing import Dict, List, Optional
 from msu_llm_lab.core.budget import BudgetService
 from msu_llm_lab.dataset.manager import DatasetManager
 from msu_llm_lab.core.live_guard import LiveAuthorization, require_live_authorization
-from msu_llm_lab.providers.base import BaseProvider, ProviderRequest, require_complete_usage
+from msu_llm_lab.providers.base import BaseProvider, ProviderRequest, UsageUnavailableError, require_complete_usage
 from msu_llm_lab.providers.openrouter import OpenRouterAdapter
 from msu_llm_lab.rag.evaluator import RAGSystemEvaluator
 from msu_llm_lab.rag.models import RAGBenchmarkReport, RAGCaseEvaluation
-from msu_llm_lab.rag.retriever import BaseRetriever, MockRetriever
+from msu_llm_lab.rag.retriever import BaseRetriever
 from msu_llm_lab.schemas.evaluation import DatasetSplit, EvaluationCase
 from msu_llm_lab.storage.db import DatabaseManager
 
@@ -23,16 +23,16 @@ class RAGBenchmarkRunner:
 
     def __init__(
         self,
+        retriever: BaseRetriever,
         db_mgr: Optional[DatabaseManager] = None,
         budget_service: Optional[BudgetService] = None,
         provider: Optional[BaseProvider] = None,
-        retriever: Optional[BaseRetriever] = None,
         top_k: int = 2,
     ):
         self.db_mgr = db_mgr or DatabaseManager()
         self.budget_service = budget_service or BudgetService(db=self.db_mgr)
         self.provider = provider or OpenRouterAdapter()
-        self.retriever = retriever or MockRetriever(mode="perfect")
+        self.retriever = retriever
         self.evaluator = RAGSystemEvaluator()
         self.top_k = top_k
 
@@ -41,12 +41,10 @@ class RAGBenchmarkRunner:
         model_id: str,
         dataset_path: Path,
         split: Optional[DatasetSplit] = None,
-        dry_run: bool = True,
         live_authorization: Optional[LiveAuthorization] = None,
     ) -> RAGBenchmarkReport:
-        """Executes full RAG benchmark over specified dataset split."""
-        if not dry_run:
-            require_live_authorization(live_authorization, model_id)
+        """Runs the RAG benchmark with real requests. Needs a live authorization covering the model; there is no simulated mode."""
+        require_live_authorization(live_authorization, model_id)
         run_id = f"rag_run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -85,8 +83,7 @@ class RAGBenchmarkRunner:
 
         # 3. Execution Loop
         for case in cases:
-            if not dry_run:
-                OpenRouterAdapter.validate_case_confidentiality(case)
+            OpenRouterAdapter.validate_case_confidentiality(case)
 
             # Step 3a: Decoupled Retrieval Pass
             import inspect
@@ -114,14 +111,16 @@ class RAGBenchmarkRunner:
             request = ProviderRequest(
                 model_id=model_id,
                 messages=prompt_messages,
-                dry_run=dry_run,
-                live_authorized=not dry_run,
+                live_authorized=True,
                 case_id=case.id,
-                expected_answer=case.expected_answer,
             )
 
             response = self.provider.generate(request)
-            require_complete_usage(response)
+            try:
+                require_complete_usage(response)
+            except UsageUnavailableError:
+                self.budget_service.record_unresolved_spend(f"tx_{run_id}_{case.id}", model_id, "openrouter", f"RAG case {case.id}: response lacked usable cost or token counts", run_id)
+                raise
 
             # Step 3c: Decoupled Scoring & Failure Attribution
             ans_corr, groundedness = self.evaluator.evaluate_generation(
@@ -179,7 +178,6 @@ class RAGBenchmarkRunner:
                 )
             failure_breakdown[attribution] = failure_breakdown.get(attribution, 0) + 1
 
-            # Record in spend ledger
             self.budget_service.record_spend(
                 transaction_id=f"tx_{run_id}_{case.id}",
                 model_id=model_id,
@@ -189,7 +187,7 @@ class RAGBenchmarkRunner:
                 run_id=run_id,
                 is_pilot=True,
                 is_preflight_estimate=False,
-                is_simulated=dry_run,
+                cost_basis=response.cost_basis,
             )
             total_cost += response.cost_usd
 
@@ -266,7 +264,7 @@ class RAGBenchmarkRunner:
             "mean_accuracy": mean_ans_corr,
             "mean_groundedness": mean_grd,
             "mean_overall_score": round((mean_ans_corr + mean_grd) / 2.0, 4),
-            "is_dry_run": dry_run,
+            "is_dry_run": False,  # legacy column: this tool no longer produces simulated runs
             "notes": (
                 f"RAG benchmark (retriever={self.retriever.__class__.__name__}, split={split or 'ALL'}, "
                 f"top_k={self.top_k}, recall@k={mean_recall}, mrr={mean_mrr})"
