@@ -51,7 +51,7 @@ class ChatClassificationAdapter:
             model_id=self.model_id,
             messages=[{"role": "system", "content": prompt_text}, {"role": "user", "content": state_text}],
             temperature=temperature, max_tokens=MAX_OUTPUT_TOKENS[task], live_authorized=live_authorized,
-            provider_preferences=self.provider_preferences,
+            provider_preferences=self.provider_preferences, extra_fields=(dict(rec.request_overrides) if rec and rec.request_overrides else None),
         )
 
     def classify(self, task: Task, state_text: str, prompt_text: str, *, live_authorized: bool) -> AdapterResult:
@@ -85,7 +85,7 @@ class ChatClassificationAdapter:
             requested_route=self.provider_preferences, confidence_source="NONE", prompt_tokens=resp.prompt_tokens, completion_tokens=resp.completion_tokens,
             usage_source=resp.usage_source, latency_ms=resp.latency_ms, attempt_latency_ms=resp.attempt_latency_ms,
             model_latency_ms=resp.model_latency_ms if resp.model_latency_source == "PROVIDER_REPORTED" else None,
-            attempts=resp.attempts, retry_errors=list(resp.retry_errors), native_cost=resp.native_cost, native_cost_unit=resp.native_cost_unit,
+            attempts=resp.attempts, retry_errors=list(resp.retry_errors), native_cost=resp.native_cost, native_cost_unit=resp.native_cost_unit, finish_reason=resp.finish_reason, reasoning_tokens=resp.reasoning_tokens,
             actual_cost_usd=resp.actual_cost_usd,
             estimated_cost_usd=resp.estimated_cost_usd, cost_usd=resp.cost_usd, cost_basis=resp.cost_basis,
         )
