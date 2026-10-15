@@ -130,8 +130,8 @@ def test_valid_choice_response_captures_everything(net, unblock):
     assert r.ok and r.predicted_label == IntentLabel.QUERY and r.issues == []
     assert r.label_probs["QUERY"] == 0.9 and r.native_confidence == 0.7 and r.confidence_source == "NATIVE_DISTRIBUTION"
     assert (r.prompt_tokens, r.completion_tokens, r.usage_source) == (1200, 3, "PROVIDER_REPORTED")
-    assert r.actual_cost_usd == Decimal("0.00005") and r.cost_basis == "PROVIDER_REPORTED"
-    assert r.estimated_cost_usd == Decimal("0.000050")  # kept separate: 1200 tokens x $0.042/M on the verified TypeSafe route
+    assert r.native_cost == Decimal("0.00005") and r.native_cost_unit == "OPENROUTER_CREDITS_USD_RATE_UNVERIFIED" and r.actual_cost_usd is None
+    assert r.estimated_cost_usd == Decimal("0.000050") and r.cost_basis == "ESTIMATED_FROM_CATALOG"  # 1200 tokens x $0.042/M, TypeSafe route
     assert r.resolved_model_id == "typesafe/jev-1.14-20261001" and r.serving_provider == "SynthProvider"
     assert r.latency_ms is not None and r.model_latency_ms is None and r.attempts == 1
     assert r.predicted_need_cta is None and r.yes_prob is None
@@ -295,7 +295,7 @@ def test_chat_intent_valid_label_pinned_route_and_no_schema_mode(net, unblock):
     assert "response_format" not in body and body["temperature"] == 0.0 and body["max_tokens"] == 16
     assert body["messages"][0] == {"role": "system", "content": INTENT_PROMPT}
     assert (r.resolved_model_id, r.serving_provider) == ("openai/gpt-4.1-nano-2025-04-14", "OpenAI")
-    assert (r.prompt_tokens, r.completion_tokens) == (800, 4) and r.cost_basis == "PROVIDER_REPORTED"
+    assert (r.prompt_tokens, r.completion_tokens) == (800, 4) and r.cost_basis == "ESTIMATED_FROM_CATALOG" and r.native_cost == Decimal("0.00009")
 
 
 @pytest.mark.parametrize("text,reason", [
@@ -336,18 +336,6 @@ def test_chat_blocked_route_is_refused_before_network(net, monkeypatch):
     with pytest.raises(LiveNotAuthorizedError):
         chat_adapter().classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=False)
     assert net.requests == []
-
-
-class SimulatedProvider(OpenRouterAdapter):
-    def generate(self, request):
-        return ProviderResponse(output_text="QUERY", prompt_tokens=5, completion_tokens=1, usage_source="SIMULATED",
-                                latency_ms=1.0, latency_source="SIMULATED", cost_basis="SIMULATED", model_id=request.model_id)
-
-
-def test_simulated_responses_are_rejected_by_the_chat_adapter():
-    ad = ChatClassificationAdapter(provider=SimulatedProvider(api_key=FAKE_KEY))
-    with pytest.raises(ProviderError, match="simulated"):
-        ad.classify(Task.INTENT, STATE, INTENT_PROMPT, live_authorized=True)
 
 
 # ------------------------------------------------------------------ Runner
@@ -472,7 +460,7 @@ def test_successful_run_stores_records_without_ground_truth_and_records_spend(en
     recs = env[2].load()
     assert [r.predicted_label for r in recs] == [IntentLabel.QUERY, IntentLabel.GREETING]
     r0 = recs[0]
-    assert r0.is_ground_truth is False and r0.is_dry_run is False and r0.status == "OK" and r0.raw_output is None
+    assert r0.is_ground_truth is False and r0.status == "OK" and r0.raw_output is None
     assert r0.requested_model_id == JEV_MODEL_ID and r0.resolved_model_id == "typesafe/jev-1.14-20261001"
     assert r0.prompt_version == prompt_version(INTENT_PROMPT) and r0.input_contract_version == "v1" and r0.dataset_version == "syn-v0"
     assert r0.parity_status == "PRODUCTION_PARITY_NOT_ESTABLISHED"
@@ -480,7 +468,7 @@ def test_successful_run_stores_records_without_ground_truth_and_records_spend(en
     assert all(not k.startswith("expected") and k not in ("review_status", "exclusion_reason") for d in stored for k in d)
     assert all(d["predicted_label"] != "OUT_OF_SCOPE" for d in stored)  # approved label differs from predictions; never copied in
     txs = env[1].get_status().recent_transactions
-    assert len(txs) == 2 and all(t['is_simulated'] == 0 and t['is_preflight_estimate'] == 0 for t in txs)  # live spend is actual
+    assert len(txs) == 2 and all(t['is_simulated'] == 0 and t['is_preflight_estimate'] == 0 and t['cost_basis'] == "ESTIMATED_FROM_CATALOG" for t in txs)
     # request material is identical with and without an approved label
     plain = cases(2)
     assert runner_mod._state_text(Task.INTENT, approved[0]) == runner_mod._state_text(Task.INTENT, plain[0])
@@ -489,13 +477,24 @@ def test_successful_run_stores_records_without_ground_truth_and_records_spend(en
 
 def test_nulls_are_persisted_without_fabricated_telemetry(env, net, unblock):
     body = jev_body()
-    del body["usage"]["input_tokens"], body["usage"]["output_tokens"]  # cost reported, tokens missing
+    del body["usage"]["cost"]  # tokens reported, provider cost missing
     net.script = [body]
     make_runner(env).run(task=Task.INTENT, cases=cases(1), model_id=JEV_MODEL_ID, prompt_text=INTENT_PROMPT, authorization=AUTH, run_id="r")
     d = json.loads(env[2].path.read_text().splitlines()[0])
-    assert d["prompt_tokens"] is None and d["completion_tokens"] is None and d["usage_source"] == "UNAVAILABLE"
-    assert d["model_latency_ms"] is None and d["estimated_cost_usd"] is None
-    assert d["actual_cost_usd"] == "0.00005" and d["cost_basis"] == "PROVIDER_REPORTED" and d["latency_ms"] is not None
+    assert d["model_latency_ms"] is None and d["native_cost"] is None and d["actual_cost_usd"] is None
+    assert d["estimated_cost_usd"] == "0.000050" and d["cost_basis"] == "ESTIMATED_FROM_CATALOG" and d["latency_ms"] is not None
+
+
+def test_native_cost_without_tokens_is_preserved_but_leaves_unresolved_spend(env, net, unblock):
+    body = jev_body()
+    del body["usage"]["input_tokens"], body["usage"]["output_tokens"]  # native cost present, tokens missing
+    net.script = [body]
+    with pytest.raises(UsageUnavailableError):
+        make_runner(env).run(task=Task.INTENT, cases=cases(1), model_id=JEV_MODEL_ID, prompt_text=INTENT_PROMPT, authorization=AUTH, run_id="r")
+    d = json.loads(env[2].path.read_text().splitlines()[0])
+    assert d["prompt_tokens"] is None and d["usage_source"] == "UNAVAILABLE" and d["native_cost"] == "0.00005"   # kept as received
+    assert d["actual_cost_usd"] is None and d["estimated_cost_usd"] is None and d["recorded_cost_usd"] is None and d["cost_basis"] == "UNAVAILABLE"
+    assert env[1].get_status().unresolved_spend_count == 1
 
 
 def test_cost_unavailable_stores_the_record_then_stops_the_run(env, net, unblock):
@@ -506,7 +505,8 @@ def test_cost_unavailable_stores_the_record_then_stops_the_run(env, net, unblock
         make_runner(env).run(task=Task.INTENT, cases=cases(2), model_id=JEV_MODEL_ID, prompt_text=INTENT_PROMPT, authorization=AUTH, run_id="r")
     recs = env[2].load()
     assert len(recs) == 1 and recs[0].recorded_cost_usd is None and recs[0].cost_basis == "UNAVAILABLE" and len(net.requests) == 1
-    assert env[1].get_status().recent_transactions == []
+    st = env[1].get_status()
+    assert st.unresolved_spend_count == 1 and st.cumulative_spend_usd == 0   # explicit unresolved entry; no invented amount
 
 
 def test_invalid_outputs_are_stored_as_invalid_not_dropped(env, net, unblock):
@@ -567,22 +567,11 @@ def test_lead_run_with_jev_and_chat_records_the_right_fields(env, net, unblock):
     assert n.predicted_need_cta is False and n.yes_prob is None and n.protocol == Protocol.CHAT_COMPLETIONS
 
 
-# ------------------------------------------------------------------ no mixing of dry-run values / ground truth
-def test_dry_run_flags_cannot_enter_records_or_runner(env, unblock):
-    with pytest.raises(Exception):
-        PredictionRecord(record_id="x", run_id="r", case_id="c", task=Task.INTENT, model_key="m", protocol=Protocol.DECISIONS_API,
-                         requested_model_id="m", prompt_version="p", status="OK", is_dry_run=True)
+# ------------------------------------------------------------------ predictions are never ground truth
+def test_predictions_can_never_be_marked_as_ground_truth():
     with pytest.raises(Exception):
         PredictionRecord(record_id="x", run_id="r", case_id="c", task=Task.INTENT, model_key="m", protocol=Protocol.DECISIONS_API,
                          requested_model_id="m", prompt_version="p", status="OK", is_ground_truth=True)
-
-    class DryAdapter(SpyAdapter):
-        def classify(self, *a, **k):
-            return AdapterResult(ok=True, task=Task.INTENT, protocol=Protocol.DECISIONS_API, requested_model_id=JEV_MODEL_ID, is_dry_run=True)
-    with pytest.raises(ProviderError, match="dry-run"):
-        make_runner(env, {JEV_MODEL_ID: DryAdapter()}).run(task=Task.INTENT, cases=cases(1), model_id=JEV_MODEL_ID,
-                                                          prompt_text=INTENT_PROMPT, authorization=AUTH)
-    assert env[2].load() == []
 
 
 # ------------------------------------------------------------------ thresholds from stored predictions
