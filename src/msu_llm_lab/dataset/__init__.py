@@ -1,4 +1,4 @@
-"""Dataset subsystem for MSU LLM Inference Workbench."""
+"""Dataset subsystem for MSU LLM Workbench."""
 
 from msu_llm_lab.dataset.leakage import (
     LeakageDetector,
