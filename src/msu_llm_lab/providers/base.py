@@ -41,7 +41,7 @@ class RateLimitError(ProviderError):
 
 
 class LiveNotAuthorizedError(ProviderError):
-    """Raised when a live (non-dry-run) request is attempted without explicit live authorization."""
+    """Raised when a request is attempted without explicit live authorization."""
     pass
 
 
@@ -56,16 +56,14 @@ class ProviderRequest(BaseModel):
     messages: List[Dict[str, str]] = Field(description="List of role/content chat messages")
     temperature: Optional[float] = Field(default=0.0, ge=0.0, le=2.0, description="None omits the field (for routes that do not list it)")
     max_tokens: int = Field(default=512, ge=1)
-    dry_run: bool = Field(default=True, description="When True, prevents any external network requests")
     live_authorized: bool = Field(
         default=False,
-        description="Must be True for any non-dry-run request; set only after explicit live confirmation",
+        description="Must be True for every request; set only after explicit live confirmation",
     )
     provider_preferences: Optional[Dict[str, Any]] = Field(
         default=None, description="OpenRouter `provider` routing object (e.g. pin + no fallbacks); sent only when set"
     )
     case_id: Optional[str] = None
-    expected_answer: Optional[str] = None
 
 
 class ProviderResponse(BaseModel):
@@ -73,19 +71,21 @@ class ProviderResponse(BaseModel):
     output_text: str
     prompt_tokens: Optional[int] = Field(default=None, description="None when the provider did not report it")
     completion_tokens: Optional[int] = Field(default=None, description="None when the provider did not report it")
-    usage_source: Literal["PROVIDER_REPORTED", "PARTIAL", "UNAVAILABLE", "SIMULATED"] = "UNAVAILABLE"
+    usage_source: Literal["PROVIDER_REPORTED", "PARTIAL", "UNAVAILABLE"] = "UNAVAILABLE"
     latency_ms: float = Field(
-        description="End-to-end request duration measured by this client (including retry waits); simulated in dry-run"
+        description="End-to-end request duration measured by this client (including retry waits)"
     )
-    latency_source: Literal["MEASURED_CLIENT", "SIMULATED"] = "MEASURED_CLIENT"
+    latency_source: Literal["MEASURED_CLIENT"] = "MEASURED_CLIENT"
     attempt_latency_ms: Optional[float] = Field(default=None, description="Measured duration of the final, successful attempt")
     model_latency_ms: Optional[float] = Field(default=None, description="Only when the provider reports it; never derived")
-    model_latency_source: Literal["PROVIDER_REPORTED", "UNAVAILABLE", "SIMULATED"] = "UNAVAILABLE"
+    model_latency_source: Literal["PROVIDER_REPORTED", "UNAVAILABLE"] = "UNAVAILABLE"
     resolved_model_id: Optional[str] = Field(default=None, description="'model' field of the response, only if present")
     serving_provider: Optional[str] = Field(default=None, description="'provider' field of the response, only if present")
     attempts: int = Field(default=1, ge=1)
     retry_errors: List[str] = Field(default_factory=list, description="Scrubbed error codes of failed attempts before success")
-    actual_cost_usd: Optional[Decimal] = Field(default=None, description="Cost reported by the provider; never derived")
+    native_cost: Optional[Decimal] = Field(default=None, description="Provider-reported usage.cost in its own unit (credits); preserved as received")
+    native_cost_unit: Optional[str] = Field(default=None, description="Unit label of native_cost; it is booked as USD only once the unit is verified")
+    actual_cost_usd: Optional[Decimal] = Field(default=None, description="USD cost, only when the provider's cost unit is verified as USD; never derived")
     estimated_cost_usd: Optional[Decimal] = Field(
         default=None, description="Catalog price x PROVIDER-REPORTED tokens; None unless both token counts were reported"
     )
@@ -93,9 +93,8 @@ class ProviderResponse(BaseModel):
         default=Decimal("0.0000"),
         description="Recorded spend: actual if reported, else the estimate, else 0 with cost_basis UNAVAILABLE",
     )
-    cost_basis: Literal["PROVIDER_REPORTED", "ESTIMATED_FROM_CATALOG", "UNAVAILABLE", "SIMULATED"] = "UNAVAILABLE"
+    cost_basis: Literal["PROVIDER_REPORTED", "ESTIMATED_FROM_CATALOG", "UNAVAILABLE"] = "UNAVAILABLE"
     model_id: str
-    is_dry_run: bool = True
     raw_response: Dict[str, Any] = Field(default_factory=dict)
 
 
@@ -110,8 +109,6 @@ _SENSITIVE_KEY_PARTS = ("key", "secret", "token", "auth", "password", "credentia
 
 def require_complete_usage(response: "ProviderResponse") -> None:
     """Fail closed when a LIVE response lacks provider usage or cost: spend cannot be recorded honestly."""
-    if response.is_dry_run:
-        return
     if response.usage_source != "PROVIDER_REPORTED" or response.cost_basis == "UNAVAILABLE":
         raise UsageUnavailableError(
             "Live response is missing provider token usage or cost, so spend cannot be recorded. "
@@ -126,8 +123,6 @@ def require_recordable_cost(response: "ProviderResponse") -> None:
     Unlike `require_complete_usage`, this does not demand token counts, so a response that reports cost but
     omits tokens is still recordable. Runners that persist tokens use `require_complete_usage` instead.
     """
-    if response.is_dry_run:
-        return
     if response.cost_basis not in ("PROVIDER_REPORTED", "ESTIMATED_FROM_CATALOG"):
         raise UsageUnavailableError(
             "Live response has neither a provider-reported cost nor reported token counts for a catalog estimate; "
@@ -170,7 +165,7 @@ class BaseProvider(ABC):
 
     @abstractmethod
     def generate(self, request: ProviderRequest) -> ProviderResponse:
-        """Dispatches request to provider or executes deterministic dry-run."""
+        """Dispatches one real request to the provider."""
         pass
 
 
