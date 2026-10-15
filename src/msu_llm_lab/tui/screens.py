@@ -1339,3 +1339,22 @@ def build_status_bar(status: BudgetStatus, feedback: str = "") -> Panel:
         padding=(0, 1),
     )
 
+
+
+def build_roster_panel(rows: List[Dict[str, Any]], cursor: int, is_focused: bool = False) -> Panel:
+    """Comparison roster: every participant with role, tasks, route, readiness, exact blockers, verification source and evaluation state."""
+    table = Table(expand=True, show_lines=False, header_style="bold")
+    for col, kw in (("Participant", {}), ("Role", {}), ("Tasks", {}), ("Route (pin)", {}), ("Readiness", {}), ("Data policy", {}),
+                    ("Eval", {}), ("Blockers / notes", {"ratio": 2}), ("Source", {"ratio": 2})):
+        table.add_column(col, overflow="fold", **kw)
+    for i, r in enumerate(rows):
+        style = "reverse" if (is_focused and i == cursor) else ""
+        ready = {"READY": "[green]READY[/green]", "SMOKE_READY": "[yellow]SMOKE_READY[/yellow]"}.get(r["readiness"], "[red]BLOCKED[/red]")
+        notes = ", ".join(r["blockers"]) or "none for synthetic data"
+        if r.get("benchmark_route_only"):
+            notes += "; benchmark route only, production parity not established"
+        table.add_row(r["display_name"] or r["key"], ", ".join(x.replace("_", " ").title() for x in r["roles"]), "/".join(r["tasks"]),
+                      f"{r['pinned_route'] or '-'} {r['route_price'] or ''}".strip(), ready, r["data_policy"], r["evaluation"], notes,
+                      f"{r['source']} ({r['checked_on'] or 'unverified'})", style=style)
+    title = "COMPARISON ROSTER (10 participants)  |  student-derived data blocked: no data policy verified"
+    return Panel(table, title=title, border_style="white" if is_focused else "grey50")
