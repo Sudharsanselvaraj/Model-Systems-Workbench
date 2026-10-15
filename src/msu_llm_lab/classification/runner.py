@@ -19,6 +19,7 @@ from typing import Dict, List, Optional, Sequence, Union
 
 from msu_llm_lab.classification import serialization
 from msu_llm_lab.classification.contracts import IntentCase, LeadCase
+from msu_llm_lab.classification import realdata
 from msu_llm_lab.classification.privacy import assert_dispatch_eligible
 from msu_llm_lab.classification.records import (
     AdapterResult, PredictionRecord, PredictionStore, Task, error_record, record_from_result,
@@ -26,6 +27,7 @@ from msu_llm_lab.classification.records import (
 from msu_llm_lab.core.budget import BudgetExceededError, BudgetService
 from msu_llm_lab.core.live_guard import LiveAuthorization, require_live_authorization
 from msu_llm_lab.models import registry
+from msu_llm_lab.observability.events import EventStore, RequestEvent
 from msu_llm_lab.providers.base import (
     ConfidentialityViolationError, LiveNotAuthorizedError, ProviderError, UsageUnavailableError,
 )
@@ -94,16 +96,27 @@ class ClassificationRunner:
         max_consecutive_errors: int = 3,
         max_state_bytes: int = MAX_STATE_BYTES,
         stage: str = "pilot",
+        telemetry: Optional[EventStore] = None,
     ):
         self.stage = stage
+        self.telemetry = telemetry if telemetry is not None else EventStore()
+        self.telemetry_errors = 0
         self.adapters = adapters
         self.store = store
         self.budget = budget_service
         self.max_consecutive_errors = max_consecutive_errors
         self.max_state_bytes = max_state_bytes
 
+    def _emit(self, **fields) -> None:
+        """Append one lifecycle event. A telemetry write failure is counted, never allowed to change a run's spend or safety logic."""
+        try:
+            self.telemetry.append(RequestEvent(**fields))
+        except OSError:
+            self.telemetry_errors += 1
+
     # ---- step 2: privacy gate and case validation (no request-building code may run before this finishes)
-    def _validate_batch(self, task: Task, cases: Sequence[Case]) -> None:
+    def _validate_batch(self, task: Task, cases: Sequence[Case], model_id: str = "", dataset_version: Optional[str] = None,
+                        real_data: Optional["realdata.RealDataAuthorization"] = None) -> None:
         want = IntentCase if task == Task.INTENT else LeadCase
         reasons: Dict[str, str] = {}
         seen = set()
@@ -115,12 +128,26 @@ class ClassificationRunner:
             if cid in seen:
                 reasons[cid] = "duplicate case_id"
             seen.add(cid)
+            if c.exclusion_reason is not None:
+                reasons[cid] = f"excluded record ({c.exclusion_reason.value}) may never be dispatched"
+                continue
             try:
                 assert_dispatch_eligible(c.classification)
             except ConfidentialityViolationError:
-                reasons[cid] = f"classification {c.classification.value} is barred from outbound dispatch"
+                # Real admissions-derived (CONFIDENTIAL) records pass only with a freshly issued operator authorization that covers
+                # this dataset version, model and task. Nothing else (INTERNAL, UNCLASSIFIED, ...) is ever released.
+                released = (c.classification.value == "CONFIDENTIAL" and realdata.is_issued(real_data)
+                            and real_data.covers(dataset_version=dataset_version, model_id=model_id, task=task.value))
+                if not released:
+                    reasons[cid] = f"classification {c.classification.value} is barred from outbound dispatch"
         if reasons:
             raise BatchRejectedError(f"Batch rejected before any request: {len(reasons)} case(s) failed the gate.", reasons)
+        if any(c.classification.value == "CONFIDENTIAL" for c in cases):
+            # Provider policies stay UNKNOWN; only the data-policy blocker may be overridden, by the operator authorization above.
+            rec = registry.record_for_model_id(model_id)
+            remaining = [b for b in (rec.student_data_blockers() if rec else ["unknown_model"]) if b != "data_policy"]
+            if remaining:
+                raise ModelNotReadyError(f"Registry blockers for real-data use of '{model_id}': {', '.join(remaining)}.")
 
     # ---- step 3: readiness, size and budget (still no request)
     def _check_ready_and_budget(self, task: Task, adapter, cases: Sequence[Case], prompt_text: str) -> None:
@@ -149,6 +176,7 @@ class ClassificationRunner:
         self, *, task: Task, cases: Sequence[Case], model_id: str, prompt_text: str,
         authorization: Optional[LiveAuthorization], run_id: Optional[str] = None,
         dataset_version: Optional[str] = None, store_raw_output: bool = False, hard_cap_usd: Optional[Decimal] = None,
+        real_data: Optional["realdata.RealDataAuthorization"] = None,
     ) -> RunSummary:
         # 1. authorization
         require_live_authorization(authorization, model_id)
@@ -156,7 +184,7 @@ class ClassificationRunner:
         if adapter is None:
             raise ModelNotReadyError(f"No adapter configured for '{model_id}'.")
         # 2. privacy gate over the WHOLE batch
-        self._validate_batch(task, cases)
+        self._validate_batch(task, cases, model_id, dataset_version, real_data)
         # 3. readiness and budget
         self._check_ready_and_budget(task, adapter, cases, prompt_text)
         # 4-6. send, validate, store
@@ -169,11 +197,20 @@ class ClassificationRunner:
             if case.case_id in done:
                 summary.n_skipped_existing += 1
                 continue
+            base = dict(request_id=f"{run_id}:{case.case_id}:{task.value}:{model_id}", run_id=run_id, case_id=case.case_id, task=task.value,
+                        model_key=model_id, requested_model_id=model_id)
+            self._emit(kind="REQUEST_STARTED", **base)
             try:
                 result: AdapterResult = adapter.classify(task, _state_text(task, case), prompt_text, live_authorized=True)
-            except (LiveNotAuthorizedError, BudgetExceededError):
+            except (LiveNotAuthorizedError, BudgetExceededError) as exc:
+                self._emit(kind="REQUEST_FAILED", status="ERROR", error_type=type(exc).__name__, **base)
                 raise
             except ProviderError as exc:
+                errs = list(getattr(exc, "errors", []) or [])
+                for cause in errs[:-1]:  # every attempt before the final one was retried; reported after the request ended
+                    self._emit(kind="REQUEST_RETRY", retry_cause=cause, **base)
+                self._emit(kind="REQUEST_FAILED", status="ERROR", error_type=type(exc).__name__, attempts=getattr(exc, "attempts", None),
+                           http_status=getattr(exc, "status", None), timed_out=bool(errs and errs[-1] == "TIMEOUT"), **base)
                 rec = error_record(exc, run_id=run_id, case_id=case.case_id, task=task, model_key=model_id, protocol=adapter.protocol,
                                    requested_model_id=model_id, prompt_version=pv, dataset_version=dataset_version,
                                    input_contract_version=case.contract_version)
@@ -187,6 +224,15 @@ class ClassificationRunner:
                     break
                 continue
             consecutive = 0
+            for cause in result.retry_errors:
+                self._emit(kind="REQUEST_RETRY", retry_cause=cause, **base)
+            self._emit(
+                kind="REQUEST_SUCCEEDED", status="OK" if result.ok else "INVALID_OUTPUT", attempts=result.attempts,
+                serving_provider=result.serving_provider, resolved_model_id=result.resolved_model_id,
+                pinned_route=(result.requested_route or {}).get("order", [None])[0] if isinstance(result.requested_route, dict) and result.requested_route.get("order") else None,
+                latency_ms=result.latency_ms, model_latency_ms=result.model_latency_ms, prompt_tokens=result.prompt_tokens,
+                completion_tokens=result.completion_tokens, cost_basis=result.cost_basis, actual_cost_usd=result.actual_cost_usd,
+                estimated_cost_usd=result.estimated_cost_usd, native_cost=result.native_cost, **base)
             rec = record_from_result(result, run_id=run_id, case_id=case.case_id, model_key=model_id, prompt_version=pv,
                                      dataset_version=dataset_version, store_raw_output=store_raw_output,
                                      input_contract_version=case.contract_version)
