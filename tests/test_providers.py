@@ -89,27 +89,6 @@ def test_confidentiality_gatekeeper_halt():
     assert "case-restricted" in str(exc_info.value)
 
 
-def test_openrouter_dry_run_simulation():
-    """OpenRouter adapter returns deterministic simulated responses with zero external network dispatch."""
-    adapter = OpenRouterAdapter(api_key="mock-key-not-used")
-    request = ProviderRequest(
-        model_id="google/gemini-3.5-flash-lite",
-        messages=[{"role": "user", "content": "What is the fee for Bachelor of Computer Science?"}],
-        dry_run=True,
-        case_id="case-cs-01",
-        expected_answer="RM 48,000 across 3 years with PTPTN eligibility.",
-    )
-
-    response = adapter.generate(request)
-    assert response.is_dry_run is True
-    assert response.model_id == "google/gemini-3.5-flash-lite"
-    assert response.latency_ms > 0
-    assert response.prompt_tokens > 0
-    assert response.completion_tokens > 0
-    assert response.cost_usd >= Decimal("0.0000")
-    assert "PTPTN" in response.output_text or "Computer Science" in response.output_text
-
-
 def test_rubric_evaluator_scoring():
     """RubricEvaluator accurately scores groundedness, factual overlap, and format adherence."""
     evaluator = RubricEvaluator()
@@ -125,13 +104,7 @@ def test_rubric_evaluator_scoring():
     assert score.format_adherence == 1.0
 
 
-def test_benchmark_runner_flow(tmp_path: Path):
-    """BenchmarkRunner executes test suite, enforces budget, and persists results to SQLite."""
-    db_path = tmp_path / "bench_test.db"
-    db_mgr = DatabaseManager(db_path=db_path)
-    db_mgr.init_db()
-
-    dataset_path = tmp_path / "test_eval.jsonl"
+def _eval_dataset(tmp_path: Path) -> Path:
     cases = [
         EvaluationCase(
             id=f"case-bench-{i}",
@@ -140,37 +113,34 @@ def test_benchmark_runner_flow(tmp_path: Path):
             programme_category="Information Technology",
             classification=DataClassification.SYNTHETIC,
             split=DatasetSplit.TEST,
-            verification=VerificationRecord(
-                status=VerificationStatus.VERIFIED,
-                reference_source="Curriculum Guide 2026",
-            ),
+            verification=VerificationRecord(status=VerificationStatus.VERIFIED, reference_source="Curriculum Guide 2026"),
         )
         for i in range(3)
     ]
     from msu_llm_lab.dataset.manager import DatasetManager
-    DatasetManager.save_jsonl(cases, dataset_path)
+    path = tmp_path / "test_eval.jsonl"
+    DatasetManager.save_jsonl(cases, path)
+    return path
 
-    runner_engine = BenchmarkRunner(db_mgr=db_mgr)
-    report = runner_engine.run(
-        model_id="google/gemini-3.5-flash-lite",
-        dataset_path=dataset_path,
-        split=DatasetSplit.TEST,
-        dry_run=True,
-    )
 
-    assert report.total_cases == 3
-    assert report.completed_cases == 3
-    assert report.failed_cases == 0
-    assert report.mean_accuracy > 0.0
-
-    # Verify persisted in database
+def test_benchmark_runner_flow(tmp_path: Path):
+    """A real (live-shaped) run executes the suite, books spend on the ledger and persists results to SQLite."""
+    from live_fakes import LiveFakeProvider
+    from msu_llm_lab.core.live_guard import LiveAuthorization
+    model = "google/gemini-3.5-flash-lite"
+    db_mgr = DatabaseManager(db_path=tmp_path / "bench_test.db")
+    db_mgr.init_db()
+    dataset = _eval_dataset(tmp_path)
+    runner_engine = BenchmarkRunner(db_mgr=db_mgr, provider=LiveFakeProvider.echoing_expected(dataset))
+    report = runner_engine.run(model_id=model, dataset_path=dataset, split=DatasetSplit.TEST,
+                               live_authorization=LiveAuthorization(models=(model,)))
+    assert report.total_cases == 3 and report.completed_cases == 3 and report.failed_cases == 0 and report.mean_accuracy > 0.0
     saved_run = db_mgr.get_evaluation_run(report.run_id)
-    assert saved_run is not None
-    assert saved_run["model_id"] == "google/gemini-3.5-flash-lite"
-    assert saved_run["completed_cases"] == 3
-
-    saved_results = db_mgr.get_evaluation_results_for_run(report.run_id)
-    assert len(saved_results) == 3
+    assert saved_run is not None and saved_run["model_id"] == model and saved_run["completed_cases"] == 3 and not saved_run["is_dry_run"]
+    assert len(db_mgr.get_evaluation_results_for_run(report.run_id)) == 3
+    txs = db_mgr.get_recent_transactions()
+    assert len(txs) == 3 and all(t["is_simulated"] == 0 and t["cost_basis"] == "ESTIMATED_FROM_CATALOG" for t in txs)
+    assert db_mgr.get_cumulative_spend()[1] == Decimal("0.000300")
 
 
 def test_benchmark_runner_budget_ceiling_enforced(tmp_path: Path):
@@ -207,24 +177,31 @@ def test_benchmark_runner_budget_ceiling_enforced(tmp_path: Path):
     from msu_llm_lab.dataset.manager import DatasetManager
     DatasetManager.save_jsonl(cases, dataset_path)
 
-    runner_engine = BenchmarkRunner(db_mgr=db_mgr, budget_service=budget_service)
+    from live_fakes import LiveFakeProvider
+    from msu_llm_lab.core.live_guard import LiveAuthorization
+    runner_engine = BenchmarkRunner(db_mgr=db_mgr, budget_service=budget_service, provider=LiveFakeProvider())
 
     with pytest.raises(BudgetExceededError) as exc_info:
         runner_engine.run(
             model_id="google/gemini-3.5-flash-lite",
             dataset_path=dataset_path,
             split=DatasetSplit.TEST,
-            dry_run=True,
+            live_authorization=LiveAuthorization(models=("google/gemini-3.5-flash-lite",)),
         )
     assert "exceeds the per-run ceiling" in str(exc_info.value)
 
 
-def test_cli_benchmark_and_compare(tmp_path: Path):
-    """CLI benchmark and compare-runs execute successfully via Typer runner."""
-    result = runner.invoke(
-        app,
-        ["benchmark", "--model", "google/gemini-3.5-flash-lite", "--split", "TEST", "--dry-run"],
-    )
-    assert result.exit_code == 0
-    assert "Benchmark Execution Summary" in result.output
-    assert "Run Identifier" in result.output
+def test_cli_benchmark_never_simulates_and_compare_runs_reads_stored_real_runs(tmp_path: Path, monkeypatch):
+    """`benchmark` has no dry-run mode: without --live it sends nothing and stores nothing; compare-runs works on recorded runs."""
+    import urllib.request
+    from live_fakes import seed_runs
+    monkeypatch.setattr(urllib.request, "urlopen", lambda *a, **k: pytest.fail("network touched"))
+    plain = runner.invoke(app, ["benchmark", "--model", "google/gemini-3.5-flash-lite", "--split", "TEST"])
+    assert plain.exit_code == 2 and "Nothing was sent" in plain.output and "REAL REQUESTS" in plain.output
+    assert runner.invoke(app, ["benchmark", "--dry-run"]).exit_code == 2  # the simulated flag no longer exists (usage error)
+    db = DatabaseManager()
+    db.init_db()
+    assert db.get_all_evaluation_runs() == [] and db.get_recent_transactions() == []
+    seed_runs(db)
+    cmp_ = runner.invoke(app, ["compare-runs", "run_test_0", "run_test_1"])
+    assert cmp_.exit_code == 0
