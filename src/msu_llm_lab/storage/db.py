@@ -21,6 +21,8 @@ CREATE TABLE IF NOT EXISTS budget_ledger (
     is_pilot INTEGER NOT NULL DEFAULT 1,
     is_preflight_estimate INTEGER NOT NULL DEFAULT 0,
     is_simulated INTEGER NOT NULL DEFAULT 0,
+    is_unresolved INTEGER NOT NULL DEFAULT 0,
+    cost_basis TEXT NOT NULL DEFAULT 'UNSPECIFIED',
     description TEXT NOT NULL
 );
 
@@ -110,6 +112,10 @@ class DatabaseManager:
         cols = [r[1] for r in conn.execute("PRAGMA table_info(budget_ledger)").fetchall()]
         if "is_simulated" not in cols:
             conn.execute("ALTER TABLE budget_ledger ADD COLUMN is_simulated INTEGER NOT NULL DEFAULT 0")
+        if "is_unresolved" not in cols:
+            conn.execute("ALTER TABLE budget_ledger ADD COLUMN is_unresolved INTEGER NOT NULL DEFAULT 0")
+        if "cost_basis" not in cols:
+            conn.execute("ALTER TABLE budget_ledger ADD COLUMN cost_basis TEXT NOT NULL DEFAULT 'UNSPECIFIED'")
         conn.execute(
             "UPDATE budget_ledger SET is_simulated = 1 WHERE is_simulated = 0 AND run_id IN "
             "(SELECT run_id FROM evaluation_runs WHERE is_dry_run = 1)"
@@ -127,6 +133,8 @@ class DatabaseManager:
         is_preflight_estimate: bool = False,
         timestamp: Optional[str] = None,
         is_simulated: bool = False,
+        is_unresolved: bool = False,
+        cost_basis: str = "UNSPECIFIED",
     ) -> None:
         """Records a new entry in the budget ledger using exact integer micros and Decimal string."""
         if timestamp is None:
@@ -140,8 +148,8 @@ class DatabaseManager:
                 """
                 INSERT INTO budget_ledger (
                     transaction_id, timestamp, run_id, model_id, provider,
-                    amount_micros, amount_usd, is_pilot, is_preflight_estimate, is_simulated, description
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    amount_micros, amount_usd, is_pilot, is_preflight_estimate, is_simulated, is_unresolved, cost_basis, description
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     transaction_id,
@@ -154,6 +162,8 @@ class DatabaseManager:
                     1 if is_pilot else 0,
                     1 if is_preflight_estimate else 0,
                     1 if is_simulated else 0,
+                    1 if is_unresolved else 0,
+                    cost_basis,
                     description,
                 ),
             )
@@ -167,6 +177,55 @@ class DatabaseManager:
             row = cursor.fetchone()
             micros = row[0] if row else 0
             return micros, Decimal(micros) / Decimal("1000000")
+
+    def purge_simulated(self, backup: bool = True) -> Dict[str, Any]:
+        """Remove every simulated ledger row and every stored dry-run run/result. A copy of the database is made first.
+
+        Rows that are not simulated (live, estimated-by-a-real-request, unresolved, reconciled) are never touched.
+        """
+        import shutil
+
+        self.init_db()
+        backup_path = None
+        if backup and str(self.db_path) != ":memory:" and Path(self.db_path).exists():
+            backup_path = Path(f"{self.db_path}.bak-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}")
+            shutil.copy2(self.db_path, backup_path)
+        with self.get_connection() as conn:
+            dry_ids = [r[0] for r in conn.execute("SELECT run_id FROM evaluation_runs WHERE is_dry_run = 1").fetchall()]
+            ledger = conn.execute("DELETE FROM budget_ledger WHERE is_simulated = 1").rowcount
+            results = 0
+            for rid in dry_ids:
+                results += conn.execute("DELETE FROM evaluation_results WHERE run_id = ?", (rid,)).rowcount
+            runs = conn.execute("DELETE FROM evaluation_runs WHERE is_dry_run = 1").rowcount
+            conn.commit()
+        return {"ledger_rows": ledger, "runs": runs, "results": results, "backup": str(backup_path) if backup_path else None}
+
+    def get_unresolved(self) -> List[Dict[str, Any]]:
+        """Ledger entries for requests that may have been billed but whose cost is unknown. Amount is never invented."""
+        with self.get_connection() as conn:
+            cur = conn.execute("SELECT transaction_id, timestamp, run_id, model_id, provider, description FROM budget_ledger WHERE is_unresolved = 1 ORDER BY timestamp")
+            return [dict(r) for r in cur.fetchall()]
+
+    def reconcile_transaction(self, transaction_id: str, amount_usd: Decimal, note: str = "") -> None:
+        """Resolve an unresolved entry with an amount the operator read from the provider dashboard (recorded as RECONCILED_MANUAL)."""
+        with self.get_connection() as conn:
+            row = conn.execute("SELECT is_unresolved FROM budget_ledger WHERE transaction_id = ?", (transaction_id,)).fetchone()
+            if row is None:
+                raise KeyError(f"No ledger entry {transaction_id}")
+            if not row[0]:
+                raise ValueError(f"Ledger entry {transaction_id} is not unresolved")
+            conn.execute(
+                "UPDATE budget_ledger SET is_unresolved = 0, amount_micros = ?, amount_usd = ?, cost_basis = 'RECONCILED_MANUAL', "
+                "description = description || ?  WHERE transaction_id = ?",
+                (int(amount_usd * 1_000_000), f"{amount_usd:.6f}", f" [reconciled manually: {note or 'amount from provider dashboard'}]", transaction_id),
+            )
+            conn.commit()
+
+    def get_spend_by_basis(self) -> Dict[str, Decimal]:
+        """Actual-side spend grouped by how the cost was established (simulated and pre-run estimates excluded)."""
+        with self.get_connection() as conn:
+            cur = conn.execute("SELECT cost_basis, COALESCE(SUM(amount_micros), 0) FROM budget_ledger WHERE is_simulated = 0 AND is_preflight_estimate = 0 AND is_unresolved = 0 GROUP BY cost_basis")
+            return {b: Decimal(m) / Decimal("1000000") for b, m in cur.fetchall()}
 
     def get_simulated_spend(self) -> tuple[int, Decimal]:
         """Returns spend recorded by dry-run simulations. It never counts against any ceiling."""
@@ -192,7 +251,7 @@ class DatabaseManager:
             cursor = conn.execute(
                 """
                 SELECT transaction_id, timestamp, run_id, model_id, provider,
-                       amount_usd, amount_micros, is_pilot, is_preflight_estimate, is_simulated, description
+                       amount_usd, amount_micros, is_pilot, is_preflight_estimate, is_simulated, is_unresolved, cost_basis, description
                 FROM budget_ledger
                 ORDER BY timestamp DESC
                 LIMIT ?
@@ -298,7 +357,7 @@ class DatabaseManager:
                     float(run["mean_accuracy"]),
                     float(run["mean_groundedness"]),
                     float(run["mean_overall_score"]),
-                    1 if run.get("is_dry_run", True) else 0,
+                    1 if run.get("is_dry_run", False) else 0,
                     run.get("notes", ""),
                 ),
             )
