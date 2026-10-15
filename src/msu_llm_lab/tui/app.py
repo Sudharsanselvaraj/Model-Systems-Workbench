@@ -697,7 +697,7 @@ class WorkbenchTUI:
                         "Pilot Budget: $2.00 ceiling. Isolated pilot experiment spending ceiling.",
                         "Total Ceiling: $10.00 experiment ceiling. Hard stop across all experiments.",
                         "Provider Spend: $0.0000 USD. Purely local SQLite tracking without outbound sync.",
-                        "Live Inference: STRICTLY DISABLED. Default dry-run mode active.",
+                        "Live inference is not available from the dashboard. Use the CLI (smoke-test) with typed approval.",
                         "Max Single Run: $0.50. Preflight check halts batches exceeding limit.",
                         "Max Single Case: $0.02. Per-case circuit breaker halts run immediately.",
                     ]
