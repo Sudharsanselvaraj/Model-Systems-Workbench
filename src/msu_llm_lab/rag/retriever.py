@@ -20,55 +20,6 @@ class BaseRetriever(ABC):
         pass
 
 
-class MockRetriever(BaseRetriever):
-    """Deterministic mock retriever supporting perfect, noisy, and empty retrieval scenarios."""
-
-    def __init__(self, mode: str = "perfect", simulated_latency_ms: float = 22.0):
-        self.mode = mode.lower()
-        self.simulated_latency_ms = simulated_latency_ms
-
-    def retrieve(self, case: EvaluationCase) -> RetrievalResult:
-        """Retrieves passages based on configured test mode."""
-        if self.mode == "empty":
-            return RetrievalResult(
-                chunks=[],
-                retriever_id=f"mock-{self.mode}",
-                latency_ms=self.simulated_latency_ms,
-                hit_rate=0.0,
-                precision=0.0,
-                metadata={"mode": self.mode, "reason": "Simulated empty retrieval failure"},
-            )
-
-        if self.mode == "noisy":
-            # Injects distractor chunk with the expected context
-            chunks = []
-            if case.expected_context:
-                chunks.append(case.expected_context)
-            chunks.append(
-                "MSU Faculty of Business offers various diploma programmes in banking and finance. "
-                "Applications are open throughout the calendar year."
-            )
-            return RetrievalResult(
-                chunks=chunks,
-                retriever_id=f"mock-{self.mode}",
-                latency_ms=self.simulated_latency_ms + 10.0,
-                hit_rate=1.0 if case.expected_context else 0.0,
-                precision=0.50,
-                metadata={"mode": self.mode, "distractor_count": 1},
-            )
-
-        # Default: Perfect Ground Truth Context
-        chunks = [case.expected_context] if case.expected_context else []
-        return RetrievalResult(
-            chunks=chunks,
-            retriever_id=f"mock-{self.mode}",
-            latency_ms=self.simulated_latency_ms,
-            hit_rate=1.0 if chunks else 0.0,
-            precision=1.0 if chunks else 0.0,
-            metadata={"mode": self.mode},
-        )
-
-
 class KeywordBM25Retriever(BaseRetriever):
     """Lightweight in-memory BM25-style lexical retriever across corpus passages."""
 
@@ -235,7 +186,7 @@ class KeywordBM25Retriever(BaseRetriever):
             for i in top_indices
             if i < len(self.doc_records)
         ]
-        lat_ms = (time.perf_counter() - start_t) * 1000.0 + 8.5  # include simulated indexing overhead
+        lat_ms = (time.perf_counter() - start_t) * 1000.0  # measured retrieval time only; nothing is added
 
         # Calculate hit rate & precision based on expected keywords
         hit_rate = 0.0
