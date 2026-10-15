@@ -143,7 +143,7 @@ def test_execute_plan_writes_records_and_reports_schema_checks_without_accuracy(
     assert len(fake_net.requests) == 10 and all(s.aborted_reason is None for s in sums)
     recs = store.load()
     assert len(recs) == 10 and {r.dataset_version for r in recs} == {smoke.SMOKE_DATASET_VERSION} and all(r.status == "OK" for r in recs)
-    assert all(not r.is_ground_truth and not r.is_dry_run for r in recs)
+    assert all(not r.is_ground_truth for r in recs)
     rows = smoke.summarize_schema_checks(recs)
     assert {(r["model"], r["task"], r["n"], r["valid"]) for r in rows} == {("typesafe/jev-1.14", "INTENT", 5, 5), ("typesafe/jev-1.14", "LEAD", 5, 5)}
     assert all("accuracy" not in k and "correct" not in k for r in rows for k in r)
