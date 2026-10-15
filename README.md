@@ -95,17 +95,20 @@ uv run msu-llm-lab ui
   <img src="assets/readme/tui_dashboard.png" alt="Full-screen TUI dashboard" width="900" />
 </p>
 
+A read-only experimental dashboard: execution state and spend by kind (ACTUAL, ESTIMATED, UNRESOLVED, legacy simulated) in the header; local CPU/memory/disk; request graphs drawn only from recorded request events (`NO LIVE INFERENCE YET` until some exist); and six experimental categories (classification quality, confidence and calibration, model agreement, Lead Qualifier, live latency and cost, robustness and readiness) plus dataset review. Supervised metrics stay `GROUND TRUTH PENDING` until human-approved labels exist. See [docs/LIVE_DASHBOARD.md](docs/LIVE_DASHBOARD.md).
+
 | Key | Action |
 |---|---|
+| `1`-`9` `0` `-` `=` / `[` `]` | Jump to a section / step through all 16 |
 | `Tab` / `Shift+Tab` | Cycle focus between panels |
-| `↑` `↓` / `k` `j` | Move through the roster, runs and registers |
-| `Enter` | Inspect the selected item |
-| `/` | Filter |
-| `:` | Command line (`:roster`, `:catalogue`, `:budget`, `:traces`, `:health`, `:refresh`, `:help`, `:quit`) |
-| `r` | Refresh ledger, telemetry and diagnostics |
+| `↑` `↓` / `k` `j`, `Home` `End` | Move through rows |
+| `Enter` | Inspect the selected item (wide terminals show a side inspector) |
+| `/` | Filter the roster |
+| `:` | Command line (`:overview`, `:quality`, `:calibration`, `:agreement`, `:lead`, `:latency`, `:robustness`, `:labels`, `:budget`, `:eval`, `:audit`, `:help`, `:quit`) |
+| `r` | Re-read telemetry, ledger and local files (the dashboard also re-polls every 2 s when idle) |
 | `q` | Quit and restore the terminal |
 
-The dashboard cannot start a live run; those go through the CLI with typed approval.
+The dashboard cannot start a live run; those go through the CLI with typed approval. Optional: `pip install "msu-llm-lab[monitor]"` adds `psutil` for true CPU and memory readings.
 
 ---
 
@@ -119,7 +122,10 @@ The dashboard cannot start a live run; those go through the CLI with typed appro
 | `api-preflight` | Key present? (no request) |
 | `smoke-test [--model ... --stage smoke\|pilot --hard-cap N --live]` | Synthetic-fixture plan and approved run for the adapters; plan only unless `--live` |
 | `prepare-classification-data [--new-version]` | Clean, redact and prepare the conversation export locally; refuses to overwrite an existing preparation |
+| `real-benchmark plan\|run\|status\|report` | Authorized real-data benchmark across the roster: plan-only planning, two typed approvals, checkpointed execution, report (see docs/REAL_BENCHMARK.md) |
+| `annotate queue\|submit\|status\|adjudicate\|approve\|revoke\|freeze` | Independent annotation, adjudication, named approval and freezing of ground-truth labels |
 | `classification-data-status` | Counts for any prepared dataset (no student text) |
+| `export-traces [-f jsonl\|csv\|zip --model --run --task --status]` | Redacted local export of stored trace records to `reports/exports/` (see docs/LIVE_DASHBOARD.md) |
 | `audit-kb <path> [--dry-run]` | Audit a markdown KB (`--dry-run` previews without writing reports) |
 | `remediate-kb [path] [--apply]` | Preview, or write, a versioned clean copy; the source is never overwritten |
 | `validate-dataset [path] [--check-leakage]` | Dataset integrity, classification and leakage |
@@ -183,6 +189,7 @@ src/msu_llm_lab/
 ├── models/             # sourced participant registry and legacy planning catalogue
 ├── traces/             # Langfuse importer and failure classifier
 ├── core/               # config, budget service, live-run authorization
+├── observability/      # request-event log, aggregation, label loader, prediction analysis, live monitor
 ├── storage/            # SQLite (WAL) ledger and run history
 └── tui/                # launcher and dashboard
 tests/                  # unit, integration and pseudo-terminal tests
