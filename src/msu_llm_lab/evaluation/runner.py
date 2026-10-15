@@ -37,7 +37,6 @@ class BenchmarkRunReport(BaseModel):
     mean_accuracy: float
     mean_groundedness: float
     mean_overall_score: float
-    is_dry_run: bool
     results: List[Dict[str, Any]] = Field(default_factory=list)
     notes: Optional[str] = None
 
@@ -61,12 +60,10 @@ class BenchmarkRunner:
         model_id: str,
         dataset_path: Path,
         split: Optional[DatasetSplit] = None,
-        dry_run: bool = True,
         live_authorization: Optional[LiveAuthorization] = None,
     ) -> BenchmarkRunReport:
-        """Executes candidate model evaluation over the specified dataset."""
-        if not dry_run:
-            require_live_authorization(live_authorization, model_id)
+        """Runs real requests for the specified dataset. Needs a live authorization covering the model; there is no simulated mode."""
+        require_live_authorization(live_authorization, model_id)
         run_id = f"run_{datetime.now(timezone.utc).strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:6]}"
         now_iso = datetime.now(timezone.utc).isoformat()
 
@@ -98,8 +95,7 @@ class BenchmarkRunner:
         # 3. Execution Loop
         for idx, case in enumerate(cases, 1):
             # Enforce Fail-Closed Confidentiality Gate
-            if not dry_run:
-                OpenRouterAdapter.validate_case_confidentiality(case)
+            OpenRouterAdapter.validate_case_confidentiality(case)
 
             prompt_messages = [
                 {
@@ -115,15 +111,17 @@ class BenchmarkRunner:
             request = ProviderRequest(
                 model_id=model_id,
                 messages=prompt_messages,
-                dry_run=dry_run,
-                live_authorized=not dry_run,
+                live_authorized=True,
                 case_id=case.id,
-                expected_answer=case.expected_answer,
             )
 
             try:
                 response = self.provider.generate(request)
-                require_complete_usage(response)
+                try:
+                    require_complete_usage(response)
+                except UsageUnavailableError:
+                    self.budget_service.record_unresolved_spend(f"tx_{run_id}_{case.id}", model_id, "openrouter", f"Evaluation case {case.id}: response lacked usable cost or token counts", run_id)
+                    raise
                 exec_id = f"exec_{run_id}_{case.id}"
                 score_id = f"score_{run_id}_{case.id}"
 
@@ -134,17 +132,16 @@ class BenchmarkRunner:
                     expected_answer=case.expected_answer,
                 )
 
-                # Record in budget ledger
                 self.budget_service.record_spend(
                     transaction_id=f"tx_{run_id}_{case.id}",
                     model_id=model_id,
                     provider="openrouter",
                     amount_usd=response.cost_usd,
-                    description=f"Evaluation case {case.id} (dry_run={dry_run})",
+                    description=f"Evaluation case {case.id}",
                     run_id=run_id,
                     is_pilot=True,
                     is_preflight_estimate=False,
-                    is_simulated=dry_run,
+                    cost_basis=response.cost_basis,
                 )
                 total_run_cost += response.cost_usd
 
@@ -192,7 +189,7 @@ class BenchmarkRunner:
             "mean_accuracy": round(mean_acc, 4),
             "mean_groundedness": round(mean_grd, 4),
             "mean_overall_score": round(mean_ovr, 4),
-            "is_dry_run": dry_run,
+            "is_dry_run": False,  # legacy column: this tool no longer produces simulated runs
             "notes": f"Evaluation over {dataset_path.name} (split: {split or 'ALL'})",
         }
 
@@ -214,7 +211,6 @@ class BenchmarkRunner:
             mean_accuracy=round(mean_acc, 4),
             mean_groundedness=round(mean_grd, 4),
             mean_overall_score=round(mean_ovr, 4),
-            is_dry_run=dry_run,
             results=completed_results,
             notes=run_summary["notes"],
         )
