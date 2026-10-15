@@ -1,4 +1,4 @@
-# MSU LLM Inference Workbench — Complete System Architecture (Phases 0–6)
+# MSU LLM Workbench — Complete System Architecture (Phases 0–6)
 
 ```mermaid
 graph TB
