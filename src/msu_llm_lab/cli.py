@@ -17,18 +17,6 @@ from msu_llm_lab.audit.reporter import KBReporter
 from msu_llm_lab.audit.validator import KBValidator
 from msu_llm_lab.core.budget import BudgetService
 from msu_llm_lab.models.catalog import get_portfolio
-from msu_llm_lab.serving import (
-    CostCrossoverAnalyzer,
-    HARDWARE_PROFILES,
-    HardwareSizingEngine,
-    MODEL_ARCHITECTURES,
-    QuantizationPrecision,
-    ServingBenchmarkSimulator,
-    ServingReportGenerator,
-    get_hardware_profile,
-    get_model_architecture,
-)
-
 import sys
 
 app = typer.Typer(
@@ -69,38 +57,47 @@ def main(
             from msu_llm_lab.tui.app import run_tui
             run_tui()
         elif sys.stdin.isatty():
-            from msu_llm_lab.tui.welcome import show_welcome_screen
-            choice = show_welcome_screen()
-            handle_welcome_action(choice)
+            run_launcher_loop()
         else:
             console.print(ctx.get_help())
 
 
+def _run_command(args: List[str]) -> None:
+    """Run a CLI command in-process exactly as if typed, so every option keeps its real default (calling a command function directly
+    would hand it unresolved Typer option objects)."""
+    try:
+        app(args=args, standalone_mode=False)
+    except (SystemExit, typer.Exit):
+        pass
+    except KeyboardInterrupt:
+        console.print("\n[dim]Interrupted.[/dim]")
+    except Exception as e:  # keep the launcher alive; show what failed instead of a traceback
+        console.print(f"[bold red]Command failed:[/bold red] {type(e).__name__}: {e}")
+
+
 def handle_welcome_action(choice: int) -> None:
-    """Dispatches user choice from the welcome launcher to appropriate workflow."""
+    """Dispatches one launcher choice to a real workflow. Nothing here simulates anything or sends data."""
     if choice == 1:
         from msu_llm_lab.tui.app import run_tui
         run_tui()
     elif choice == 2:
         gen = Path("Copy of MSU General KB - Local - Sudarshan.md")
         if gen.exists():
-            console.print("\n[bold #c084fc]Auditing MSU General Knowledge Base...[/]")
-            audit_kb(file_path=gen, dry_run=True)
-    elif choice == 3:
-        benchmark_rag(retriever_mode="bm25", dry_run=True, top_k=3)
-    elif choice == 4:
-        models_roster()
-        console.print("\n[dim]Next: msu-llm-lab api-preflight, then msu-llm-lab smoke-test (plan only until you add --live).[/dim]")
-    elif choice == 5:
-        trace_file = Path("data/traces/synthetic_langfuse_traces.json")
-        if trace_file.exists():
-            import_traces(export_file=trace_file, output_dir=Path("reports/"))
+            console.print("\n[bold #c084fc]Auditing MSU General Knowledge Base (read-only; nothing is written)...[/]")
+            _run_command(["audit-kb", str(gen), "--dry-run"])
         else:
-            console.print("[yellow]Trace file not found in data/traces/.[/]")
+            console.print(f"[yellow]Knowledge base file not found: {gen}[/]")
+    elif choice == 3:
+        _run_command(["classification-data-status"])
+    elif choice == 4:
+        _run_command(["models", "roster"])
+        console.print("\n[dim]Next: api-preflight (menu 5), then the smoke-test plan (menu 6).[/dim]")
+    elif choice == 5:
+        _run_command(["api-preflight"])
     elif choice == 6:
-        simulate_serving(model="qwen/qwen-2.5-72b", hardware="a100_80gb", tp=2)
+        _run_command(["smoke-test"])
     elif choice == 7:
-        budget_status()
+        _run_command(["budget", "status"])
     elif choice == 8:
         console.print("\n[bold #c084fc]Cryptographic Knowledge Base Baseline Verification:[/]")
         gen = Path("Copy of MSU General KB - Local - Sudarshan.md")
@@ -111,6 +108,23 @@ def handle_welcome_action(choice: int) -> None:
             console.print(f"  Programmes KB SHA-256: [green]{compute_sha256(prog)}[/] (Verified Immutable)")
     elif choice == 9:
         console.print("[dim]Exiting MSU LLM Workbench. Goodbye.[/]\n")
+
+
+def run_launcher_loop() -> None:
+    """Show the launcher, run the chosen workflow, then come back to the menu. Only 'Exit' (9), q or Esc leaves."""
+    from msu_llm_lab.tui.welcome import MENU_ITEMS, show_welcome_screen
+
+    exit_choice = len(MENU_ITEMS)
+    while True:
+        choice = show_welcome_screen()
+        handle_welcome_action(choice)
+        if choice == exit_choice or choice == 0:
+            break
+        if choice != 1:  # the dashboard is full-screen and returns straight to the menu; command output needs a pause to be read
+            try:
+                console.input("\n[dim]Press Enter to return to the menu...[/dim]")
+            except (EOFError, KeyboardInterrupt):
+                break
 
 
 def _require_live_confirmation(models: List[str], dataset_name: str):
@@ -189,15 +203,33 @@ def smoke_test(
     import uuid
     run_id = f"smoke_{uuid.uuid4().hex[:8]}"
     store = PredictionStore(Path(out_dir) / f"{run_id}.jsonl")
+    failure = None
+    summaries = []
     try:
-        smoke.execute_plan(plan, auth, smoke.build_smoke_adapters(model, stage), store, budget, prompts, run_id)
-    except (ProviderError, Exception) as e:  # records already written stay on disk; report honestly
-        console.print(f"[bold red]Smoke test stopped:[/bold red] {type(e).__name__}: {e}")
+        summaries = smoke.execute_plan(plan, auth, smoke.build_smoke_adapters(model, stage), store, budget, prompts, run_id)
+    except Exception as e:  # records already written stay on disk; the failure is reported and sets a failing exit status
+        failure = f"{type(e).__name__}: {e}"
+        console.print(f"[bold red]Smoke test stopped:[/bold red] {failure}")
     recs = store.load()
     console.print(f"\nSchema verification only (no accuracy computed). Records: {store.path}", markup=False)
     for row in smoke.summarize_schema_checks(recs):
         console.print(str(row), markup=False, highlight=False)
-    raise typer.Exit(code=0 if recs else 1)
+    problems = []
+    if failure:
+        problems.append("the run stopped before finishing")
+    problems += [f"a run aborted: {s.aborted_reason}" for s in summaries if s.aborted_reason]
+    bad = [r for r in recs if r.status != "OK"]
+    if bad:
+        problems.append(f"{len(bad)} record(s) were invalid outputs or errors")
+    planned = sum(r.n_cases for r in plan.rows)
+    if len(recs) < planned:
+        problems.append(f"only {len(recs)} of {planned} planned requests produced a record")
+    if budget.unresolved():
+        problems.append("unresolved spend is on the ledger (run `msu-llm-lab budget reconcile`)")
+    if problems:
+        console.print("[bold red]SMOKE TEST FAILED:[/bold red] " + "; ".join(problems), markup=True)
+        raise typer.Exit(code=1)
+    console.print("[green]Smoke test completed: every planned request produced a valid record.[/green]")
 
 
 @models_app.command("roster")
@@ -212,6 +244,31 @@ def models_roster() -> None:
         table.add_row(r["display_name"] or r["key"], ", ".join(r["roles"]), ", ".join(r["tasks"]), r["readiness"], r["data_policy"],
                       r["evaluation"], ", ".join(r["blockers"]) or "none (synthetic)")
     console.print(table)
+
+
+@app.command("classification-data-status")
+def classification_data_status() -> None:
+    """Show what local dataset preparation exists (counts only; no student text)."""
+    import json
+
+    base = Path("data/classification_prep")
+    manifests = sorted(base.glob("*/manifest.json")) if base.exists() else []
+    if not manifests:
+        console.print("No prepared classification dataset found. Run: msu-llm-lab prepare-classification-data", markup=False)
+        return
+    for p in manifests:
+        try:
+            m = json.loads(p.read_text())
+        except Exception:
+            console.print(f"{p.parent.name}: unreadable manifest", markup=False)
+            continue
+        cand, sess = m["candidates"], m["session_comparison"]["sessions"]
+        console.print(f"{p.parent.name}  ({m.get('parity_status')})", markup=False)
+        console.print(f"  rows accounted: {m['cleaning']['rows_accounted']} of {m['source']['rows']}   answers missing: {m['cleaning']['answers_missing']}   source unchanged: {m['source']['unchanged_after_run']}", markup=False)
+        console.print(f"  sessions: 30m {sess['30m']} / 2h {sess['2h']} (provisional, neither chosen)", markup=False)
+        console.print(f"  intent cases: {cand['intent_2h']['cases']}  lead cases: 30m {cand['lead_30m']['cases']} / 2h {cand['lead_2h']['cases']}", markup=False)
+        console.print("  expected labels: ALL NULL (human review pending)   student data may not be sent to any provider", markup=False)
+        console.print(f"  pseudonymization: {m.get('pseudonymization', {}).get('salt_id', 'n/a (older preparation)')}   privacy: {m.get('privacy_notice', 'n/a (older preparation)')}", markup=False)
 
 
 @app.command("api-preflight")
@@ -248,6 +305,7 @@ def api_preflight() -> None:
 def prepare_classification_data(
     source: Path = typer.Option(Path("september_to_october.csv"), "--source", help="Historical export (read only)."),
     out_dir: Path = typer.Option(Path("data/classification_prep/prep-v1"), "--out-dir", help="Local, git-ignored output folder."),
+    new_version: bool = typer.Option(False, "--new-version", help="If the folder already has content, write a new sibling version (prep-v1-r2, ...) instead of refusing."),
 ) -> None:
     """Clean, redact and prepare the historical export for human review. Local only; prints aggregates, never student text."""
     from msu_llm_lab.classification import dataprep
@@ -255,21 +313,26 @@ def prepare_classification_data(
     if not source.exists():
         console.print(f"[bold red]Source not found:[/bold red] {source}")
         raise typer.Exit(code=1)
-    manifest = dataprep.prepare(source, out_dir)
+    if new_version:
+        out_dir = dataprep.next_free_version_dir(out_dir)
+    try:
+        manifest = dataprep.prepare(source, out_dir)
+    except dataprep.PrepOverwriteError as e:
+        console.print(f"[bold red]Refused:[/bold red] {e}")
+        raise typer.Exit(code=1)
     c = manifest["cleaning"]
     console.print(f"{manifest['parity_status']}  |  prep {manifest['prep_version']}  |  rows accounted: {c['rows_accounted']} of {manifest['source']['rows']}", markup=False)
     console.print(f"dispositions: {c['dispositions']}  duplicates: {c['duplicates']}  answers missing: {c['answers_missing']}", markup=False)
     console.print(f"redactions: {c['redaction_token_counts']}  rows with any redaction: {c['rows_with_any_redaction']}", markup=False)
     console.print(f"sessions: {manifest['session_comparison']['sessions']}  views/splits: {manifest['views_and_splits']}", markup=False)
     console.print(f"source unchanged: {manifest['source']['unchanged_after_run']}   artifacts in {out_dir}", markup=False)
+    console.print(f"pseudonymization: {manifest['pseudonymization']['salt_id']} (protected: {manifest['pseudonymization']['protected_secret_used']})   privacy: {manifest['privacy_notice']}", markup=False)
 
 
 @app.command(name="welcome")
 def launch_welcome() -> None:
     """Launch the interactive developer-grade welcome screen."""
-    from msu_llm_lab.tui.welcome import show_welcome_screen
-    choice = show_welcome_screen()
-    handle_welcome_action(choice)
+    run_launcher_loop()
 
 
 @app.command(name="ui")
@@ -632,24 +695,26 @@ def run_benchmark(
         "-s",
         help="Evaluation split to benchmark: 'TEST', 'DEV', or 'ALL'.",
     ),
-    dry_run: bool = typer.Option(
-        True,
-        "--dry-run/--live",
-        help="Run offline mock simulation (default) or live OpenRouter network dispatch.",
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Send real requests to OpenRouter. Required: without it the command only explains what it would do and sends nothing.",
     ),
 ) -> None:
-    """Benchmark a candidate model across evaluation test cases with budget tracking."""
+    """Benchmark a candidate model with REAL requests (typed approval required), tracked against the budget."""
     from msu_llm_lab.evaluation.runner import BenchmarkRunner
     from msu_llm_lab.schemas.evaluation import DatasetSplit
 
-    mode_label = "[bold yellow]DRY-RUN (Simulated Offline)[/bold yellow]" if dry_run else "[bold green]LIVE NETWORK DISPATCH[/bold green]"
     console.print(Panel(
         f"[bold cyan]MSU Model Evaluation Benchmark[/bold cyan]\n"
         f"Target Model:  [bold white]{model_id}[/bold white]\n"
         f"Dataset:       {dataset_path.name}\n"
-        f"Mode:          {mode_label}",
+        f"Mode:          [bold green]REAL REQUESTS[/bold green] (typed approval required)",
         expand=False,
     ))
+    if not live:
+        console.print("Nothing was sent. Add --live to request typed approval for real requests.", markup=False)
+        raise typer.Exit(code=2)
 
     target_split = None
     if split.upper() != "ALL":
@@ -659,14 +724,13 @@ def run_benchmark(
             console.print(f"[bold red]Error:[/bold red] Invalid split '{split}'. Choose TEST, DEV, or ALL.")
             raise typer.Exit(code=1)
 
-    live_auth = None if dry_run else _require_live_confirmation([model_id], dataset_path.name)
+    live_auth = _require_live_confirmation([model_id], dataset_path.name)
     runner = BenchmarkRunner()
     try:
         report = runner.run(
             model_id=model_id,
             dataset_path=dataset_path,
             split=target_split,
-            dry_run=dry_run,
             live_authorization=live_auth,
         )
     except Exception as e:
@@ -801,16 +865,10 @@ def benchmark_rag(
         "-s",
         help="Partition split to benchmark: 'TEST', 'DEV', or 'ALL'.",
     ),
-    retriever_mode: str = typer.Option(
-        "perfect",
-        "--retriever",
-        "-r",
-        help="Retriever configuration: 'perfect', 'noisy', 'empty', or 'bm25'.",
-    ),
-    dry_run: bool = typer.Option(
-        True,
-        "--dry-run/--live",
-        help="Run offline mock simulation (default) or live OpenRouter network dispatch.",
+    live: bool = typer.Option(
+        False,
+        "--live",
+        help="Send real requests to OpenRouter. Required: without it the command only explains what it would do and sends nothing.",
     ),
     compare_with: Optional[str] = typer.Option(
         None,
@@ -832,59 +890,51 @@ def benchmark_rag(
 ) -> None:
     """Benchmark candidate models on decoupled retrieval, generation, and end-to-end RAG metrics."""
     from msu_llm_lab.dataset.manager import DatasetManager
-    from msu_llm_lab.rag.retriever import KeywordBM25Retriever, MockRetriever
+    from msu_llm_lab.rag.retriever import KeywordBM25Retriever
     from msu_llm_lab.rag.runner import RAGBenchmarkRunner
     from msu_llm_lab.schemas.evaluation import DatasetSplit
 
     split_clean = split.strip().upper()
     split_enum = DatasetSplit(split_clean) if split_clean in DatasetSplit.__members__ else DatasetSplit.UNASSIGNED
 
-    # Initialize retriever
-    if retriever_mode.lower() == "bm25":
-        gen_kb_path = Path("data/audit/parsed_records_general_kb.jsonl")
-        prog_kb_path = Path("data/audit/parsed_records_programmes_kb.jsonl")
-        if gen_kb_path.exists() or prog_kb_path.exists():
-            retriever = KeywordBM25Retriever.from_parsed_kb(
-                general_path=gen_kb_path if gen_kb_path.exists() else None,
-                programmes_path=prog_kb_path if prog_kb_path.exists() else None,
-                exclude_defective=exclude_defective,
-            )
-            manifest = getattr(retriever, "manifest", {})
-            console.print(
-                f"[dim]BM25 indexed {len(retriever.documents)} clean documents from audited KB records "
-                f"(excluded {manifest.get('excluded_defective_count', 0)} defective records).[/dim]"
-            )
-        else:
-            all_cases = DatasetManager.load_jsonl(dataset)
-            retriever = KeywordBM25Retriever(corpus_cases=all_cases)
-            console.print("[yellow]Warning: Audited KB records not found; falling back to evaluation context passages.[/yellow]")
-        
-        # Verify no evaluation leakage
-        test_cases = DatasetManager.load_jsonl(dataset)
-        leaked = retriever.verify_no_leakage(test_cases)
-        if leaked:
-            console.print(f"[bold red]WARNING: Evaluation data leakage detected for case IDs: {leaked}[/bold red]")
-    elif retriever_mode.lower() in ("noisy", "empty"):
-        retriever = MockRetriever(mode=retriever_mode.lower())
-    else:
-        retriever = MockRetriever(mode="perfect")
+    # Real retrieval only: a BM25 index over the audited knowledge-base records. There is no mock or answer-leaking retriever.
+    gen_kb_path = Path("data/audit/parsed_records_general_kb.jsonl")
+    prog_kb_path = Path("data/audit/parsed_records_programmes_kb.jsonl")
+    if not (gen_kb_path.exists() or prog_kb_path.exists()):
+        console.print("[bold red]Audited knowledge-base records not found under data/audit/.[/bold red] Run `msu-llm-lab audit-kb` first; "
+                      "the benchmark will not fall back to evaluation passages.")
+        raise typer.Exit(code=1)
+    retriever = KeywordBM25Retriever.from_parsed_kb(
+        general_path=gen_kb_path if gen_kb_path.exists() else None,
+        programmes_path=prog_kb_path if prog_kb_path.exists() else None,
+        exclude_defective=exclude_defective,
+    )
+    manifest = getattr(retriever, "manifest", {})
+    console.print(
+        f"[dim]BM25 indexed {len(retriever.documents)} clean documents from audited KB records "
+        f"(excluded {manifest.get('excluded_defective_count', 0)} defective records).[/dim]"
+    )
+    test_cases = DatasetManager.load_jsonl(dataset)
+    leaked = retriever.verify_no_leakage(test_cases)
+    if leaked:
+        console.print(f"[bold red]WARNING: Evaluation data leakage detected for case IDs: {leaked}[/bold red]")
 
-    mode_str = "[yellow]DRY-RUN (Simulated Offline)[/yellow]" if dry_run else "[red]LIVE (Outbound API Dispatch)[/red]"
     console.print(Panel(
         f"[bold cyan]MSU End-to-End RAG Benchmark[/bold cyan]\n"
         f"[dim]Primary Model:[/dim]  [bold white]{model}[/bold white]\n"
-        f"[dim]Retriever:[/dim]      [bold green]{retriever.__class__.__name__}[/bold green] (mode: {retriever_mode}, top_k: {top_k})\n"
+        f"[dim]Retriever:[/dim]      [bold green]{retriever.__class__.__name__}[/bold green] (top_k: {top_k})\n"
         f"[dim]Dataset:[/dim]        {dataset.name} (Split: {split_clean})\n"
-        f"[dim]Execution Mode:[/dim] {mode_str}",
+        f"[dim]Execution Mode:[/dim] [red]REAL REQUESTS[/red] (typed approval required)",
         expand=False,
     ))
+    if not live:
+        console.print("Nothing was sent. Add --live to request typed approval for real requests.", markup=False)
+        raise typer.Exit(code=2)
 
-    live_auth = None
-    if not dry_run:
-        live_models = [model] + ([compare_with] if compare_with else [])
-        live_auth = _require_live_confirmation(live_models, dataset.name)
+    live_models = [model] + ([compare_with] if compare_with else [])
+    live_auth = _require_live_confirmation(live_models, dataset.name)
     runner = RAGBenchmarkRunner(retriever=retriever, top_k=top_k)
-    report_a = runner.run(model_id=model, dataset_path=dataset, split=split_enum, dry_run=dry_run, live_authorization=live_auth)
+    report_a = runner.run(model_id=model, dataset_path=dataset, split=split_enum, live_authorization=live_auth)
 
     # 1. Decoupled Summary Table
     summary_table = Table(title="Decoupled RAG Performance Summary", show_header=True, header_style="bold magenta")
@@ -971,7 +1021,7 @@ def benchmark_rag(
             expand=False,
         ))
         runner_b = RAGBenchmarkRunner(retriever=retriever)
-        report_b = runner_b.run(model_id=compare_with, dataset_path=dataset, split=split_enum, dry_run=dry_run, live_authorization=live_auth)
+        report_b = runner_b.run(model_id=compare_with, dataset_path=dataset, split=split_enum, live_authorization=live_auth)
 
         comp_table = Table(title=f"Comparative Benchmark: {model} vs {compare_with}", show_header=True, header_style="bold magenta")
         comp_table.add_column("Metric", style="cyan")
@@ -1126,6 +1176,42 @@ def import_traces(
 # ---------------------------------------------------------------------------
 
 
+@budget_app.command(name="reconcile")
+def budget_reconcile(
+    transaction_id: str = typer.Option(..., "--transaction-id", "-t", help="Unresolved ledger entry to resolve."),
+    amount_usd: str = typer.Option(..., "--amount-usd", "-a", help="Real amount in USD read from the provider dashboard."),
+    note: str = typer.Option("", "--note", help="Optional note, for example the dashboard date."),
+) -> None:
+    """Resolve an unresolved-spend entry with an amount you read from the provider dashboard. Live runs stay blocked until none remain."""
+    from decimal import Decimal, InvalidOperation
+
+    try:
+        amount = Decimal(amount_usd)
+        if amount < 0:
+            raise InvalidOperation
+    except InvalidOperation:
+        console.print("[bold red]--amount-usd must be a non-negative number[/bold red]")
+        raise typer.Exit(code=1)
+    service = BudgetService()
+    service.db.init_db()
+    try:
+        service.db.reconcile_transaction(transaction_id, amount, note)
+    except (KeyError, ValueError) as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+    left = len(service.unresolved())
+    console.print(f"Reconciled {transaction_id} at ${amount:.6f}. Unresolved entries remaining: {left}.", markup=False)
+
+
+@budget_app.command(name="purge-simulated")
+def budget_purge_simulated() -> None:
+    """Delete all simulated (dry-run) ledger rows and stored dry-run runs. The database is copied first; real entries are never touched."""
+    service = BudgetService()
+    result = service.db.purge_simulated(backup=True)
+    console.print(f"Removed {result['ledger_rows']} simulated ledger rows, {result['runs']} dry-run runs and {result['results']} stored results.", markup=False)
+    console.print(f"Backup of the previous database: {result['backup'] or 'none (no database file)'}", markup=False)
+
+
 @budget_app.command(name="status")
 def budget_status() -> None:
     """Display current spend ledger, remaining balances, and local policy ceilings."""
@@ -1160,7 +1246,16 @@ def budget_status() -> None:
         total_status_str,
     )
     console.print(table)
-    console.print(f"[dim]Simulated dry-run spend (not counted against any ceiling): ${status.simulated_spend_usd:.6f}[/dim]\n")
+    if status.simulated_spend_usd > 0:  # only legacy rows from before simulated runs stopped being recorded
+        console.print(f"[dim]Legacy simulated entries (never counted against any ceiling): ${status.simulated_spend_usd:.6f}[/dim]")
+    if status.spend_by_basis:
+        console.print("[dim]Booked spend by basis: " + ", ".join(f"{k} ${v:.6f}" for k, v in sorted(status.spend_by_basis.items())) + "[/dim]")
+    if status.unresolved_spend_count:
+        console.print(f"[bold red]UNRESOLVED SPEND: {status.unresolved_spend_count} request(s) have unknown cost. Live runs are blocked until you run "
+                      "`msu-llm-lab budget reconcile --transaction-id ... --amount-usd ...`.[/bold red]")
+        for u in service.unresolved():
+            console.print(f"  {u['transaction_id']}  {u['model_id']}", markup=False)
+    console.print("")
 
     rule_table = Table(title="Per-Execution Safety Rules", show_header=True, header_style="bold blue")
     rule_table.add_column("Safety Rule", style="cyan")
@@ -1169,7 +1264,7 @@ def budget_status() -> None:
 
     rule_table.add_row("Max Single Run Spend", f"${status.per_run_ceiling_usd:.4f}", "Preflight check rejects run if exceeded")
     rule_table.add_row("Max Single Case Spend", f"${status.per_case_ceiling_usd:.4f}", "Per-case circuit breaker halts run")
-    rule_table.add_row("Execution Mode", "Dry-Run by Default", "Requires --live and explicit confirmation")
+    rule_table.add_row("Execution Mode", "Real requests only", "Typed approval of the exact plan; interactive terminal required")
     console.print(rule_table)
 
     if status.recent_transactions:
@@ -1204,219 +1299,8 @@ def budget_status() -> None:
 
 @models_app.command(name="list")
 def models_list() -> None:
-    """List all candidate models in the evaluation portfolio with status and pricing."""
-    candidates = get_portfolio()
-
-    console.print(Panel("[bold cyan]MSU LLM Workbench — Candidate Portfolio[/bold cyan]", expand=False))
-    console.print(
-        "[yellow]NOTE: Model IDs and pricing below are preliminary entries. "
-        "They have NOT yet been validated against OpenRouter live API (scheduled for Step 2).[/yellow]\n"
-    )
-
-    table = Table(title="Evaluation Model Candidates", show_header=True, header_style="bold magenta")
-    table.add_column("Model ID", style="cyan", no_wrap=True)
-    table.add_column("Display Name", style="bold")
-    table.add_column("Deployment Mode", style="blue")
-    table.add_column("Est. $/1M (In / Out)", justify="right")
-    table.add_column("License", style="dim")
-    table.add_column("Verification Status", justify="center")
-    table.add_column("Experimental Role", style="italic")
-
-    for m in candidates:
-        status_disp = f"[bold yellow]{m.verification_status}[/bold yellow]"
-        pricing_str = f"${m.input_price_per_1m_usd:.2f} / ${m.output_price_per_1m_usd:.2f}"
-        table.add_row(
-            m.model_id,
-            m.display_name,
-            m.deployment_mode,
-            pricing_str,
-            m.license,
-            status_disp,
-            m.experimental_purpose,
-        )
-
-    console.print(table)
-    console.print("\n[dim]Hosted OpenRouter runs are distinct from self-hosted vLLM serving. Every evaluation record logs its deployment mode.[/dim]")
-
-
-# ---------------------------------------------------------------------------
-# Serving & Concurrency Simulation Command (Phase 6)
-# ---------------------------------------------------------------------------
-
-
-@app.command(name="simulate-serving")
-def simulate_serving(
-    model_id: str = typer.Option(
-        "qwen/qwen-2.5-72b",
-        "--model",
-        "-m",
-        help="Target model architecture ID (e.g. 'qwen/qwen-2.5-72b', 'meta/llama-3.3-70b', 'qwen/qwen-2.5-14b', 'qwen/qwen-2.5-7b').",
-    ),
-    hardware: str = typer.Option(
-        "a100_80gb",
-        "--hardware",
-        "-hw",
-        help="Target GPU hardware profile: 'a100_80gb', 'h100_80gb', 'rtx_4090', 'l40s_48gb', 'mac_studio_128gb'.",
-    ),
-    tp: int = typer.Option(
-        2,
-        "--tp",
-        help="Tensor Parallel size (number of GPUs pooled).",
-    ),
-    precision: str = typer.Option(
-        "BF16",
-        "--precision",
-        "-p",
-        help="Model quantization precision: 'BF16', 'FP16', 'AWQ_INT4', 'INT8'.",
-    ),
-    output_dir: Path = typer.Option(
-        Path("reports"),
-        "--output-dir",
-        "-o",
-        help="Directory to persist markdown serving benchmark report.",
-    ),
-) -> None:
-    """Simulate self-hosted vLLM inference serving, hardware sizing, concurrency ramp, and cost crossover."""
-    console.print(Panel("[bold cyan]MSU LLM Workbench — vLLM Serving & Concurrency Simulation[/bold cyan]", expand=False))
-
-    # 1. Resolve architecture, hardware, and precision
-    model_arch = get_model_architecture(model_id)
-    gpu_profile = get_hardware_profile(hardware)
-    try:
-        quant_prec = QuantizationPrecision(precision.upper())
-    except ValueError:
-        quant_prec = QuantizationPrecision.BF16
-
-    console.print(
-        f"[bold]Target Model:[/] {model_arch.display_name} ({model_arch.param_count_billions}B params, {quant_prec.value})\n"
-        f"[bold]Hardware:[/] {tp}x {gpu_profile.name} (Total VRAM: {gpu_profile.vram_gb * tp:.1f} GB)\n"
-    )
-
-    # 2. Run simulation
-    simulator = ServingBenchmarkSimulator()
-    report = simulator.simulate_ramp(
-        model=model_arch,
-        gpu=gpu_profile,
-        precision=quant_prec,
-        tensor_parallel_size=tp,
-    )
-
-    # 3. Memory Sizing Breakdown Table
-    sizing = report.sizing
-    sizing_table = Table(title="Hardware Memory Sizing & KV-Cache Allocation", show_header=True, header_style="bold magenta")
-    sizing_table.add_column("Subsystem / Component", style="bold")
-    sizing_table.add_column("Memory Allocated", justify="right")
-    sizing_table.add_column("% of Total VRAM", justify="right")
-    sizing_table.add_column("Engineering Context / Notes", style="dim")
-
-    tot_vram = max(0.1, sizing.total_gpu_vram_gb)
-    sizing_table.add_row(
-        "Model Parameters",
-        f"{sizing.weights_memory_gb:.2f} GB",
-        f"{sizing.weights_memory_gb / tot_vram * 100:.1f}%",
-        f"Quantized weights ({quant_prec.value}) with 5% framework padding",
-    )
-    sizing_table.add_row(
-        "CUDA Context & Runtime",
-        f"{sizing.cuda_runtime_overhead_gb:.2f} GB",
-        f"{sizing.cuda_runtime_overhead_gb / tot_vram * 100:.1f}%",
-        f"Static PyTorch runtime and NCCL comm buffers ({tp} GPUs)",
-    )
-    sizing_table.add_row(
-        "Activation Buffer",
-        f"{sizing.activation_overhead_gb:.2f} GB",
-        f"{sizing.activation_overhead_gb / tot_vram * 100:.1f}%",
-        "Dynamic intermediate layer activations (PagedAttention)",
-    )
-    sizing_table.add_row(
-        "Available KV-Cache",
-        f"{sizing.kv_cache_allocated_gb:.2f} GB",
-        f"{sizing.kv_cache_allocated_gb / tot_vram * 100:.1f}%",
-        f"{sizing.kv_cache_per_token_bytes:.1f} B/token. Max {sizing.max_concurrent_sessions_8k} concurrent 8k sessions",
-    )
-    dep_color = "green" if sizing.is_deployable else "bold red"
-    sizing_table.add_row(
-        "Total Cluster Allocation",
-        f"{sizing.total_memory_required_gb:.2f} / {sizing.total_gpu_vram_gb:.1f} GB",
-        f"[{dep_color}]{'DEPLOYABLE' if sizing.is_deployable else 'OOM'}[/{dep_color}]",
-        sizing.limiting_factor,
-    )
-    console.print(sizing_table)
-    console.print("")
-
-    # 4. Concurrency Ramp Table
-    ramp_table = Table(title="Progressive Concurrency Ramp Simulation (1 to 150 Workers)", show_header=True, header_style="bold cyan")
-    ramp_table.add_column("Workers", justify="right", style="bold")
-    ramp_table.add_column("Throughput", justify="right")
-    ramp_table.add_column("Mean TTFT", justify="right")
-    ramp_table.add_column("P95 TTFT", justify="right")
-    ramp_table.add_column("Mean TPOT", justify="right")
-    ramp_table.add_column("P95 Latency", justify="right")
-    ramp_table.add_column("KV Util", justify="right")
-    ramp_table.add_column("Preempt %", justify="right")
-    ramp_table.add_column("SLA Adherence", justify="right")
-
-    for step in report.concurrency_ramp:
-        sla_color = "green" if step.sla_adherence_pct >= 95.0 else ("yellow" if step.sla_adherence_pct >= 80.0 else "red")
-        ramp_table.add_row(
-            str(step.concurrency_level),
-            f"{step.output_tokens_per_second:.1f} tok/s",
-            f"{step.mean_ttft_ms:.0f} ms",
-            f"{step.p95_ttft_ms:.0f} ms",
-            f"{step.mean_tpot_ms:.1f} ms",
-            f"{step.p95_total_latency_ms / 1000.0:.2f} s",
-            f"{step.kv_cache_utilization_pct:.1f}%",
-            f"{step.preemption_rate_pct:.1f}%",
-            f"[{sla_color}]{step.sla_adherence_pct:.1f}%[/{sla_color}]",
-        )
-    console.print(ramp_table)
-    console.print("")
-
-    # 5. Cost-Crossover Analysis
-    cost_analyzer = CostCrossoverAnalyzer()
-    # Comparison against Google Gemini Flash ($0.075 / $0.30)
-    cost_comp = cost_analyzer.analyze(
-        model=model_arch,
-        gpu=gpu_profile,
-        cloud_api_input_per_1m=Decimal("0.0750"),
-        cloud_api_output_per_1m=Decimal("0.3000"),
-        tensor_parallel_size=tp,
-        estimated_monthly_msu_queries=60000,
-    )
-
-    cost_table = Table(title="Cost Crossover Analysis (Self-Hosted GPU vs. Cloud API)", show_header=True, header_style="bold yellow")
-    cost_table.add_column("Evaluation Parameter", style="bold")
-    cost_table.add_column("Value / Metric", justify="right")
-    cost_table.add_column("Strategic Implication", style="dim")
-
-    cost_table.add_row(
-        "Dedicated GPU Cluster Cost",
-        f"${cost_comp.monthly_hosting_cost_usd:,.2f} / month",
-        f"${cost_comp.gpu_hourly_cost_usd:.2f}/hr base + 15% network/storage buffer",
-    )
-    cost_table.add_row(
-        "Cloud API Cost Per Query",
-        f"${cost_comp.cost_per_query_cloud_usd:.6f} / query",
-        f"Based on {cost_comp.avg_prompt_tokens} prompt / {cost_comp.avg_completion_tokens} completion tokens",
-    )
-    cost_table.add_row(
-        "Break-Even Volume Threshold",
-        f"{cost_comp.break_even_monthly_queries:,} queries/mo",
-        f"Equivalent to {cost_comp.break_even_daily_queries:,} student queries per day",
-    )
-    viab_color = "green" if cost_comp.is_economically_viable_for_msu else "yellow"
-    cost_table.add_row(
-        "Economic Viability for MSU",
-        f"[{viab_color}]{'VIABLE' if cost_comp.is_economically_viable_for_msu else 'UNJUSTIFIED'}[/{viab_color}]",
-        "MSU peak intake traffic (~2,000/day = 60k/month)",
-    )
-    console.print(cost_table)
-
-    console.print(f"\n[bold]Recommendation:[/] {cost_comp.recommendation_summary}\n")
-
-    # 6. Save Report
-    report_file = ServingReportGenerator.save_report(report, cost_comp, output_dir)
-    console.print(f"[bold green]✓[/bold green] Serving benchmark report saved to [bold cyan]{report_file}[/bold cyan]")
+    """List the comparison participants (same view as `models roster`)."""
+    models_roster()
 
 
 if __name__ == "__main__":
