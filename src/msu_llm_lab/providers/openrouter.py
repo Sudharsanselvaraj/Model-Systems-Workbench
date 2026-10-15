@@ -242,7 +242,7 @@ class OpenRouterAdapter(BaseProvider):
             "Content-Type": "application/json",
             "Authorization": f"Bearer {self.api_key}",
             "HTTP-Referer": "https://github.com/Sudharsanselvaraj/Model-Systems-Workbench",
-            "X-Title": "MSU LLM Inference Workbench",
+            "X-Title": "MSU LLM Workbench",
         }
         poster = RetryingPoster(
             timeout_seconds=self.timeout_seconds, max_attempts=self.max_attempts,
