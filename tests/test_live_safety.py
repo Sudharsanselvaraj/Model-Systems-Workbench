@@ -544,9 +544,10 @@ def test_retry_after_non_numeric_is_ignored_for_backoff(monkeypatch):
 def test_registry_blocks_live_for_unverified_route_before_any_http(monkeypatch):
     from registry_helpers import block_route
     block_route(monkeypatch, "gpt-4.1-nano")
+    block_route(monkeypatch, "jev-1.14")
     monkeypatch.setattr(or_mod.urllib.request, "urlopen", lambda *a, **k: pytest.fail("urlopen called"))
     adapter = OpenRouterAdapter(api_key=FAKE_KEY)
-    for model in ("openai/gpt-4.1-nano", "typesafe/jev-1.14"):  # blocked route; Jev's unconfirmed schema at the strict stage
+    for model in ("openai/gpt-4.1-nano", "typesafe/jev-1.14"):  # both routes blocked
         with pytest.raises(ProviderError, match="registry blockers"):
             adapter.generate(live_request(model_id=model))
 
