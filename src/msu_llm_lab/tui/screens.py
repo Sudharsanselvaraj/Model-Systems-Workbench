@@ -36,15 +36,25 @@ from msu_llm_lab.tui.theme import (
 
 
 NAV_ITEMS = [
-    ("1", "Model Catalogue", "Model candidates and verification"),
-    ("2", "Budget & Usage", "Budget ledger and spending limits"),
-    ("3", "Dataset Validation", "Dataset schemas and integrity checks"),
-    ("4", "Evaluation Runs", "Evaluation planning and results"),
-    ("5", "Traces & Observability", "Latency and trace inspection"),
-    ("6", "Project Health", "Environment and database diagnostics"),
-    ("7", "Settings", "Workbench parameters and paths"),
-    ("8", "Help", "Shortcuts and documentation"),
+    ("1", "Overview", "Live experiment state and category status"),
+    ("2", "Model Roster", "Ten participants, routes, readiness and blockers"),
+    ("3", "Classification Quality", "Accuracy, F1 and confusion (approved labels only)"),
+    ("4", "Confidence & Calibration", "Native probabilities, ECE, Brier"),
+    ("5", "Model Agreement", "Pairwise agreement and kappa (not correctness)"),
+    ("6", "Lead Qualifier", "YES/NO, threshold, held-out results"),
+    ("7", "Live Latency & Cost", "Latency, reliability and cost from recorded requests"),
+    ("8", "Robustness & Readiness", "Slices, repeatability, compatibility, blockers"),
+    ("9", "Dataset Review & Labels", "Preparation and label-approval status"),
+    ("0", "Budget & Spend", "Budget ledger and spending limits"),
+    ("-", "Traces & Observability", "Latency and trace inspection"),
+    ("=", "Settings & Help", "Workbench parameters and shortcuts"),
+    (" ", "Trace Explorer & Export", "Filter, preview and export trace records"),
+    (" ", "Evaluation Runs", "Generation / RAG benchmark runs"),
+    (" ", "Project Health", "Environment and database diagnostics"),
+    (" ", "Dataset Validation", "Dataset schemas and integrity checks"),
 ]
+NAV_KEYS = ["overview", "roster", "quality", "calibration", "agreement", "lead", "latency", "robustness", "dataset", "budget",
+            "traces", "settings", "explorer", "evaluations", "health", "validation"]
 
 
 def build_top_header() -> Table:
@@ -77,6 +87,7 @@ def build_navigation_panel(
     active_index: int,
     is_focused: bool = False,
     cursor_index: Optional[int] = None,
+    max_rows: Optional[int] = None,
 ) -> Panel:
     """Builds the upper-left navigation sidebar panel matching charcoal monochrome reference."""
     if cursor_index is None:
@@ -86,18 +97,18 @@ def build_navigation_panel(
     grid.add_column("title", ratio=1, no_wrap=True)
     grid.add_column("badge", justify="right", width=3, no_wrap=True)
 
-    items = [
-        "Model Catalogue",
-        "Budget & Usage",
-        "Dataset Validation",
-        "Evaluation Runs",
-        "Traces & Observ.",
-        "Project Health",
-        "Settings",
-        "Help",
-    ]
+    items = [t for _, t, _ in NAV_ITEMS]
+    # Show a window of the list around the cursor when the terminal is too short for every entry.
+    total_rows = len(items) + 2
+    lo, hi = 0, len(items)
+    if max_rows is not None and total_rows > max_rows:
+        visible = max(3, max_rows - 2)
+        lo = max(0, min(cursor_index - visible // 2, len(items) - visible))
+        hi = lo + visible
 
     for idx, title in enumerate(items):
+        if idx < lo or idx >= hi:
+            continue
         is_active = (idx == active_index)
         is_cursor = (idx == cursor_index)
 
@@ -203,6 +214,14 @@ def _build_histogram_metric_cell(
     return cell
 
 
+def _pct_or_na(v: Optional[float]) -> str:
+    return "UNAVAILABLE" if v is None else f"{int(v)}%"
+
+
+def _axis_label(telemetry: SystemTelemetry) -> str:
+    return f"{len(telemetry.cpu)}x{telemetry.min_interval_s:g}s"
+
+
 def build_system_resources_panel(telemetry: SystemTelemetry) -> Panel:
     """Builds the top-middle system resource graphs (CPU, MEM, DISK) as a standalone Panel."""
     grid = Table.grid(expand=True, padding=(0, 2))
@@ -213,17 +232,17 @@ def build_system_resources_panel(telemetry: SystemTelemetry) -> Panel:
     # 1. CPU
     cpu_pct, cpu_detail, cpu_hist = telemetry.get_cpu_info()
     cpu_top, cpu_bot, cpu_base = render_2row_histogram(cpu_hist, 0.0, 100.0, width=18)
-    cpu_cell = _build_histogram_metric_cell("CPU", f"{int(cpu_pct)}%", cpu_top, cpu_bot, cpu_base, cpu_detail, "60s", "100", " 50", "  0")
+    cpu_cell = _build_histogram_metric_cell("CPU" if telemetry.cpu_source == "psutil" else "LOAD/core", _pct_or_na(cpu_pct), cpu_top, cpu_bot, cpu_base, cpu_detail, _axis_label(telemetry), "100", " 50", "  0")
 
     # 2. MEM
     mem_pct, mem_detail, mem_hist = telemetry.get_mem_info()
     mem_top, mem_bot, mem_base = render_2row_histogram(mem_hist, 0.0, 100.0, width=18)
-    mem_cell = _build_histogram_metric_cell("MEM", f"{int(mem_pct)}%   {mem_detail}", mem_top, mem_bot, mem_base, "", "60s", "100", " 50", "  0")
+    mem_cell = _build_histogram_metric_cell("MEM", (f"{_pct_or_na(mem_pct)}   {mem_detail}" if mem_pct is not None else mem_detail), mem_top, mem_bot, mem_base, "", _axis_label(telemetry), "100", " 50", "  0")
 
     # 3. DISK
     disk_pct, disk_detail, disk_hist = telemetry.get_disk_info()
     disk_top, disk_bot, disk_base = render_2row_histogram(disk_hist, 0.0, 100.0, width=18)
-    disk_cell = _build_histogram_metric_cell("DISK", f"{int(disk_pct)}%   {disk_detail}", disk_top, disk_bot, disk_base, "", "60s", "100", " 50", "  0")
+    disk_cell = _build_histogram_metric_cell("DISK", f"{_pct_or_na(disk_pct)}   {disk_detail}", disk_top, disk_bot, disk_base, "", _axis_label(telemetry), "100", " 50", "  0")
 
     grid.add_row(cpu_cell, mem_cell, disk_cell)
     return Panel(
@@ -236,34 +255,42 @@ def build_system_resources_panel(telemetry: SystemTelemetry) -> Panel:
     )
 
 
+def _scaled_cell(title: str, unit: str, values: List[Optional[float]], width: int = 16) -> Table:
+    """One request-metric histogram cell. Scale follows the data; a bucket with no measurement is blank."""
+    nums = [v for v in values if v is not None]
+    if not nums:
+        top, bot, base = render_2row_histogram([], 0.0, 1.0, width=width)
+        return _build_histogram_metric_cell(f"{title} ({unit})", "no data", top, bot, base, "", "", "  -", "  -", "  -")
+    hi = max(nums) or 1.0
+    top, bot, base = render_2row_histogram([0.0 if v is None else v for v in values], 0.0, hi, width=width)
+    fmt = lambda x: f"{x:.0f}" if hi >= 10 else f"{x:.1f}"  # noqa: E731
+    return _build_histogram_metric_cell(f"{title} ({unit})", f"last {fmt(nums[-1])}", top, bot, base, "", f"{len(values)} buckets", fmt(hi).rjust(4), fmt(hi / 2).rjust(4), "   0")
+
+
 def build_request_metrics_panel(telemetry: InferenceTelemetry) -> Panel:
-    """Builds the 4 mini request metric histogram charts."""
+    """Request graphs drawn from the recorded request-event buckets only; idle (not animated) when nothing arrives."""
     grid = Table.grid(expand=True, padding=(0, 2))
-    grid.add_column("c1", ratio=1)
-    grid.add_column("c2", ratio=1)
-    grid.add_column("c3", ratio=1)
-    grid.add_column("c4", ratio=1)
-
-    lat_samples = list(telemetry.latency_history) if telemetry.is_live else []
-    tok_samples = list(telemetry.token_history) if telemetry.is_live else []
-    con_samples = list(telemetry.concurrency_history) if telemetry.is_live else []
-    err_samples = list(telemetry.error_history) if telemetry.is_live else []
-
-    lat_top, lat_bot, lat_base = render_2row_histogram(lat_samples, 0.0, 2000.0, width=16)
-    tok_top, tok_bot, tok_base = render_2row_histogram(tok_samples, 0.0, 500.0, width=16)
-    con_top, con_bot, con_base = render_2row_histogram(con_samples, 0.0, 10.0, width=16)
-    err_top, err_bot, err_base = render_2row_histogram(err_samples, 0.0, 10.0, width=16)
-
-    c1 = _build_histogram_metric_cell("Request Latency (ms)", "", lat_top, lat_bot, lat_base, "", "60s", "2000", "1000", "   0")
-    c2 = _build_histogram_metric_cell("Tokens / Second", "", tok_top, tok_bot, tok_base, "", "60s", " 500", " 250", "   0")
-    c3 = _build_histogram_metric_cell("Concurrent Requests", "", con_top, con_bot, con_base, "", "60s", "  10", "   5", "   0")
-    c4 = _build_histogram_metric_cell("Error Rate (%)", "", err_top, err_bot, err_base, "", "60s", "  10", "   5", "   0")
-
-    grid.add_row(c1, c2, c3, c4)
-    title_str = "REQUEST METRICS (No live inference yet)" if not telemetry.is_live and telemetry.sample_count == 0 else "REQUEST METRICS"
+    for i in range(4):
+        grid.add_column(f"c{i}", ratio=1)
+    if not telemetry.is_live:
+        msg = Text("NO LIVE INFERENCE YET: graphs fill only from recorded request events", style=f"bold {COLOR_WARNING}")
+        panel_body: RenderableType = msg
+    elif telemetry.n_in_window == 0:
+        last = datetime.fromtimestamp(telemetry.last_terminal_ts).strftime("%d %b %H:%M:%S") if telemetry.last_terminal_ts else "n/a"
+        panel_body = Text(f"NO REQUESTS IN THE CURRENT {telemetry.window_s / 60:.0f}-MINUTE WINDOW. {telemetry.sample_count} historical request(s) are recorded "
+                          f"(last finished {last}); see Live Latency & Cost for the full history. Graphs show only the current window.", style=f"bold {COLOR_WARNING}")
+    else:
+        v = telemetry.values
+        grid.add_row(
+            _scaled_cell("E2E latency", "ms", v("latency_e2e")),
+            _scaled_cell("Tokens/s", "tok/s", v("tokens_per_second")),
+            _scaled_cell("Concurrent", "req", v("concurrency")),
+            _scaled_cell("Error rate", "%", v("error_rate")),
+        )
+        panel_body = grid
     return Panel(
-        grid,
-        title=f"[{TEXT_PRIMARY}]{title_str}[/{TEXT_PRIMARY}]",
+        panel_body,
+        title=f"[{TEXT_PRIMARY}]REQUEST METRICS (ACTUAL requests, recorded events, last {telemetry.window_s / 60:.0f} min){'' if telemetry.is_live else ' - NO LIVE INFERENCE YET'}[/{TEXT_PRIMARY}]",
         title_align="left",
         border_style=BORDER_CHARCOAL,
         style=STYLE_PANEL,
@@ -283,19 +310,33 @@ def build_system_and_metrics_panel(
     return outer
 
 
-def build_inference_status_panel(status: BudgetStatus) -> Panel:
-    """Builds the upper-right inference status card."""
+def build_inference_status_panel(status: BudgetStatus, agg=None) -> Panel:
+    """Upper-right inference status card. Counts come from the request event log when one is supplied."""
     table = Table.grid(expand=True, padding=(0, 1))
-    table.add_column("k", style=f"{TEXT_SECONDARY}", width=13)
-    table.add_column("v", justify="right")
+    table.add_column("k", style=f"{TEXT_SECONDARY}", width=12)
+    table.add_column("v", justify="right", no_wrap=True)
 
-    table.add_row("Mode:", Text("LOCAL ONLY", style=f"bold {TEXT_PRIMARY}"))
-    table.add_row("API Calls:", Text("0", style=f"{TEXT_PRIMARY}"))
-    table.add_row("Total Spend:", Text(f"${status.cumulative_spend_usd:.4f}", style=f"{TEXT_PRIMARY}"))
+    if agg is None:
+        mode, calls = "UNKNOWN", "UNAVAILABLE"
+    elif agg.active:
+        mode, calls = "LIVE", f"{agg.n_started} ({agg.active} active)"
+    elif agg.has_live_inference:
+        mode, calls = "IDLE", str(agg.n_started)
+    else:
+        mode, calls = "NO LIVE YET", "0"
+    pct_left = (status.remaining_total_usd / status.total_ceiling_usd * 100) if status.total_ceiling_usd > 0 else Decimal("0")
+    table.add_row("Mode:", Text(mode, style=f"bold {TEXT_PRIMARY}"))
+    table.add_row("API Calls:", Text(calls, style=f"{TEXT_PRIMARY}"))
+    by = status.spend_by_basis
+    actual = by.get("PROVIDER_REPORTED", Decimal("0")) + by.get("RECONCILED", Decimal("0"))
+    est = by.get("ESTIMATED_FROM_CATALOG", Decimal("0"))
+    table.add_row("Counted:", Text(f"${status.cumulative_spend_usd:.4f}", style=f"bold {TEXT_PRIMARY}"))
+    table.add_row(" actual:", Text(f"${actual:.4f}", style=f"{TEXT_SECONDARY}"))
+    table.add_row(" estimated:", Text(f"${est:.4f}", style=f"{TEXT_SECONDARY}"))
     table.add_row("Pilot Limit:", Text(f"${status.pilot_ceiling_usd:.2f}", style=f"{TEXT_PRIMARY}"))
     table.add_row("Total Limit:", Text(f"${status.total_ceiling_usd:.2f}", style=f"{TEXT_PRIMARY}"))
-    table.add_row("Remaining:", Text(f"${status.remaining_total_usd:.2f}", style=f"bold {TEXT_PRIMARY}"))
-    table.add_row("", Text("(100%)", style=f"{TEXT_SECONDARY}"))
+    table.add_row("Remaining:", Text(f"${status.remaining_total_usd:.2f} ({pct_left:.0f}%)", style=f"bold {TEXT_PRIMARY}"))
+    table.add_row("Unresolved:", Text(str(status.unresolved_spend_count), style=f"bold {COLOR_ERROR}" if status.unresolved_spend_count else TEXT_PRIMARY))
 
     return Panel(
         table,
@@ -526,8 +567,12 @@ def build_budget_main_panel(
     row4_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 4) else None
     row5_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 5) else None
 
-    s_table.add_row("Provider-Reported Spend", "$0.0000 USD", "No outbound provider synchronization; local tracking only", style=row2_style)
-    s_table.add_row("Live Inference Enabled", f"[bold {COLOR_ERROR}]NO[/]", "Live runs only via the CLI with typed approval; requires explicit live approval", style=row3_style)
+    by = status.spend_by_basis
+    s_table.add_row(
+        "Spend by basis (local ledger)",
+        f"ACTUAL ${by.get('PROVIDER_REPORTED', Decimal('0')) + by.get('RECONCILED', Decimal('0')):.4f} / EST ${by.get('ESTIMATED_FROM_CATALOG', Decimal('0')):.4f} / UNRESOLVED {status.unresolved_spend_count}",
+        f"Legacy simulated rows (never counted): ${status.simulated_spend_usd:.4f}. No outbound provider synchronization.", style=row2_style)
+    s_table.add_row("Live inference from this screen", f"[bold {COLOR_ERROR}]NOT AVAILABLE[/]", "Live runs only via the CLI with typed approval of the exact plan", style=row3_style)
     s_table.add_row("Max Single Run Spend", f"${status.per_run_ceiling_usd:.4f} USD", "Preflight check rejects run if exceeded", style=row4_style)
     s_table.add_row("Max Single Case Spend", f"${status.per_case_ceiling_usd:.4f} USD", "Per-case circuit breaker halts run", style=row5_style)
     grid.add_row(s_table)
@@ -1007,7 +1052,10 @@ def build_settings_main_panel(is_focused: bool) -> Panel:
     t.append("  Reports Directory: ", style=f"{TEXT_SECONDARY}")
     t.append("reports/\n", style=f"{TEXT_PRIMARY}")
     t.append("  Budget Ceilings:   ", style=f"{TEXT_SECONDARY}")
-    t.append("$10.00 Total  │  $2.00 Pilot  │  $0.50 Per-Run  │  $0.02 Per-Case\n", style=f"{TEXT_PRIMARY}")
+    from msu_llm_lab.core.budget_policy import effective_policy
+    from msu_llm_lab.core.config import settings as _settings
+    _p = effective_policy(_settings.budget, _settings.data_dir)
+    t.append(f"${_p.total_budget_usd:.2f} Total  │  ${_p.pilot_budget_usd:.2f} Pilot  │  ${_p.per_run_ceiling_usd:.2f} Per-Run  │  ${_p.per_case_ceiling_usd:.2f} Per-Case\n", style=f"{TEXT_PRIMARY}")
     t.append("  Provider Secret:   ", style=f"{TEXT_SECONDARY}")
     t.append("[EXCLUDED] OPENROUTER_API_KEY loaded via env only\n\n", style=f"dim {COLOR_WARNING}")
     t.append("Press 'r' to reload configuration from disk.", style=f"{TEXT_MUTED}")
@@ -1035,24 +1083,35 @@ def build_help_main_panel(is_focused: bool = False) -> Panel:
     t1.append("  ↓ / j           Move selection down (sidebar or catalogue)\n", style=f"{TEXT_PRIMARY}")
     t1.append("  ← / →           Switch active pane (Nav ↔ Main ↔ Command)\n", style=f"{TEXT_PRIMARY}")
     t1.append("  Tab / Shift+Tab Cycle focus predictably between panels\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  1 - 8           Jump directly to navigation section\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  1-9, 0, -, =    Jump to sections 1-12 (Overview ... Settings & Help)\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  [ / ]           Previous / next section (reaches all 15)\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  Home / End      First / last row; PgUp / PgDn move 3 rows\n", style=f"{TEXT_PRIMARY}")
     t1.append("  Enter           Activate section / Inspect model candidate\n", style=f"{TEXT_PRIMARY}")
     t1.append("  /               Open search filter in Model Catalogue\n", style=f"{TEXT_PRIMARY}")
     t1.append("  :               Open command line mode\n", style=f"{TEXT_PRIMARY}")
-    t1.append("  r               Refresh telemetry, budget ledger, diagnostics\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  r               Re-read telemetry log, ledger, files (read-only)\n", style=f"{TEXT_PRIMARY}")
+    t1.append("  (idle)          Telemetry is re-polled every 2 s; nothing is sent\n", style=f"{TEXT_PRIMARY}")
     t1.append("  ?               Toggle this help cheatsheet\n", style=f"{TEXT_PRIMARY}")
     t1.append("  Esc             Cancel search / Cancel command / Focus Nav\n", style=f"{TEXT_PRIMARY}")
     t1.append("  q               Quit application safely (outside text entry)\n", style=f"{TEXT_PRIMARY}")
 
     t2 = Text()
     t2.append("Interactive Commands (:):\n", style=f"bold {TEXT_PRIMARY}")
-    t2.append("  :models, :m     Switch to Model Catalogue\n", style=f"{TEXT_PRIMARY}")
-    t2.append("  :budget, :b     Switch to Budget & Usage\n", style=f"{TEXT_PRIMARY}")
-    t2.append("  :dataset, :d    Switch to Dataset Validation\n", style=f"{TEXT_PRIMARY}")
-    t2.append("  :eval, :e       Switch to Evaluation Runs\n", style=f"{TEXT_PRIMARY}")
-    t2.append("  :traces, :t     Switch to Traces & Observability\n", style=f"{TEXT_PRIMARY}")
-    t2.append("  :health, :h     Switch to Project Health diagnostics\n", style=f"{TEXT_PRIMARY}")
-    t2.append("  :settings, :s   Switch to Settings\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :overview       Overview of the six experimental categories\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :roster, :models  Model roster (:catalogue = legacy table)\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :quality        Classification quality (approved labels only)\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :calibration    Confidence and calibration\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :agreement      Model agreement (not correctness)\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :lead           Lead Qualifier\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :latency        Live latency, reliability and cost\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :robustness     Robustness and readiness\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :labels         Dataset review and labels (read-only)\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :budget, :b     Budget & Spend\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :traces, :t     Traces & Observability\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :eval, :rag     Evaluation / RAG benchmark runs\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :health, :h     Project Health diagnostics\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :validate       Dataset (JSONL) validation\n", style=f"{TEXT_PRIMARY}")
+    t2.append("  :settings, :s   Settings & Help\n", style=f"{TEXT_PRIMARY}")
     t2.append("  :audit          Execute live knowledge base integrity audit\n", style=f"{TEXT_PRIMARY}")
     t2.append("  :clear          Clear search query and status messages\n", style=f"{TEXT_PRIMARY}")
     t2.append("  :q, :quit       Exit workbench\n", style=f"{TEXT_PRIMARY}")
@@ -1169,7 +1228,7 @@ def _dataset_prep_summary() -> Optional[Dict[str, Any]]:
     import json
     from pathlib import Path
 
-    for p in sorted(Path("data/classification_prep").glob("*/manifest.json")) if Path("data/classification_prep").exists() else []:
+    for p in reversed(sorted(Path("data/classification_prep").glob("*/manifest.json"))) if Path("data/classification_prep").exists() else []:
         try:
             m = json.loads(p.read_text())
             return {"version": m["prep_version"], "rows": m["cleaning"]["rows_accounted"], "intent": m["candidates"]["intent_2h"]["cases"],
@@ -1180,7 +1239,7 @@ def _dataset_prep_summary() -> Optional[Dict[str, Any]]:
     return None
 
 
-def build_datasets_bottom_panel() -> Panel:
+def build_datasets_bottom_panel(info_override=None, labels_status: Optional[str] = None) -> Panel:
     """Builds the bottom-right DATASETS panel from the local preparation manifest (counts only)."""
     grid = Table.grid(expand=True, padding=(0, 1))
     grid.add_column("k", style=f"{TEXT_SECONDARY}", width=12)
@@ -1194,7 +1253,7 @@ def build_datasets_bottom_panel() -> Panel:
         grid.add_row("Privacy:", Text("-", style=f"{TEXT_MUTED}"))
         grid.add_row("Next Step:", Text("msu-llm-lab prepare-classification-data", style=f"{TEXT_PRIMARY}"))
     else:
-        grid.add_row("Status:", Text("PREPARED (labels unapproved)", style=f"bold {TEXT_PRIMARY}"))
+        grid.add_row("Status:", Text(f"PREPARED ({labels_status or 'labels unapproved'})", style=f"bold {TEXT_PRIMARY}"))
         grid.add_row("Cases:", Text(f"{info['intent']} intent / {info['lead']} lead (30m/2h)", style=f"{TEXT_SECONDARY}"))
         grid.add_row("Versions:", Text(f"{info['version']}  sessions 30m {info['sessions']['30m']} / 2h {info['sessions']['2h']}", style=f"{TEXT_SECONDARY}"))
         grid.add_row("Privacy:", Text("user4 excluded; identifiers redacted; local only", style=f"{TEXT_SECONDARY}"))
@@ -1246,7 +1305,7 @@ def build_command_bar(
     )
 
 
-def build_footer_bar(status: BudgetStatus) -> Table:
+def build_footer_bar(status: BudgetStatus, agg=None) -> Table:
     """Builds the bottom-most shortcuts and status strip."""
     grid = Table.grid(expand=True)
     grid.style = f"{TEXT_PRIMARY} on {BG_DARK}"
@@ -1272,9 +1331,9 @@ def build_footer_bar(status: BudgetStatus) -> Table:
     left.append("Quit", style=f"{TEXT_SECONDARY}")
 
     right = Text()
-    right.append("Local", style=f"bold {COLOR_SUCCESS}")
+    right.append("Read-only monitor", style=f"bold {COLOR_SUCCESS}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
-    right.append("No API calls", style=f"{TEXT_SECONDARY}")
+    right.append("API requests: UNAVAILABLE" if agg is None else f"API requests logged: {agg.n_started}", style=f"{TEXT_SECONDARY}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
     right.append(f"Budget: ${status.remaining_total_usd:.2f}", style=f"bold {CYAN_HIGHLIGHT}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
@@ -1365,20 +1424,40 @@ def build_status_bar(status: BudgetStatus, feedback: str = "") -> Panel:
 
 
 
-def build_roster_panel(rows: List[Dict[str, Any]], cursor: int, is_focused: bool = False) -> Panel:
-    """Comparison roster: every participant with role, tasks, route, readiness, exact blockers, verification source and evaluation state."""
-    table = Table(expand=True, show_lines=False, header_style="bold")
-    for col, kw in (("Participant", {}), ("Role", {}), ("Tasks", {}), ("Route (pin)", {}), ("Readiness", {}), ("Data policy", {}),
-                    ("Eval", {}), ("Blockers / notes", {"ratio": 2}), ("Source", {"ratio": 2})):
+def build_roster_panel(rows: List[Dict[str, Any]], cursor: int, is_focused: bool = False, width: int = 200) -> Panel:
+    """Comparison roster. Columns keep a minimum width so long names and blockers wrap inside their cell instead of collapsing the table;
+    the complete details of the selected participant are printed below the table."""
+    from rich.console import Group
+
+    wide = width >= 150
+    table = Table(expand=True, show_lines=False, header_style="bold", pad_edge=False)
+    spec = [("Participant", dict(min_width=22, ratio=3)), ("Role", dict(min_width=12, ratio=2)), ("Tasks", dict(min_width=7, no_wrap=True)),
+            ("Route (pin)", dict(min_width=16, ratio=3)), ("Readiness", dict(min_width=11, no_wrap=True)), ("Data policy", dict(min_width=8, no_wrap=True)),
+            ("Eval", dict(min_width=8, no_wrap=True)), ("Blockers / notes", dict(min_width=24, ratio=5))]
+    if wide:
+        spec.append(("Source", dict(min_width=22, ratio=3)))
+    for col, kw in spec:
         table.add_column(col, overflow="fold", **kw)
     for i, r in enumerate(rows):
         style = "reverse" if (is_focused and i == cursor) else ""
         ready = {"READY": "[green]READY[/green]", "SMOKE_READY": "[yellow]SMOKE_READY[/yellow]"}.get(r["readiness"], "[red]BLOCKED[/red]")
         notes = ", ".join(r["blockers"]) or "none for synthetic data"
         if r.get("benchmark_route_only"):
-            notes += "; benchmark route only, production parity not established"
-        table.add_row(r["display_name"] or r["key"], ", ".join(x.replace("_", " ").title() for x in r["roles"]), "/".join(r["tasks"]),
-                      f"{r['pinned_route'] or '-'} {r['route_price'] or ''}".strip(), ready, r["data_policy"], r["evaluation"], notes,
-                      f"{r['source']} ({r['checked_on'] or 'unverified'})", style=style)
-    title = "COMPARISON ROSTER (10 participants)  |  student-derived data blocked: no data policy verified"
-    return Panel(table, title=title, border_style="white" if is_focused else "grey50")
+            notes += "; benchmark route only"
+        cells = [r["display_name"] or r["key"], ", ".join(x.replace("_", " ").title() for x in r["roles"]), "/".join(t[:1] + t[1:].lower() for t in r["tasks"]),
+                 f"{r['pinned_route'] or '-'} {r['route_price'] or ''}".strip(), ready, r["data_policy"], r["evaluation"].replace("NOT_YET_EVALUATED", "not run"), notes]
+        if wide:
+            cells.append(f"{r['source']} ({r['checked_on'] or 'unverified'})")
+        table.add_row(*cells, style=style)
+    sel = rows[max(0, min(cursor, len(rows) - 1))] if rows else None
+    detail = Text("")
+    if sel:
+        detail = Text()
+        detail.append(f"{sel['display_name'] or sel['key']}  ({sel['model_id']}, {sel['protocol']})\n", style="bold")
+        detail.append(f"roles {', '.join(sel['roles'])}  tasks {', '.join(sel['tasks'])}  pinned route {sel['pinned_route'] or 'none'} {sel['route_price'] or ''}  readiness {sel['readiness']}\n")
+        detail.append(f"blockers: {', '.join(sel['blockers']) or 'none for synthetic data'}   student-data blockers: {', '.join(sel['student_data_blockers']) or 'none'}   data policy {sel['data_policy']}\n")
+        detail.append(f"source: {sel['source']} (checked {sel['checked_on'] or 'unverified'})")
+        if sel.get("benchmark_route_only"):
+            detail.append(f"\nbenchmark route only; reported production name '{sel['production_reported_name']}'; production parity not established")
+    title = "COMPARISON ROSTER (10 participants)  |  student-derived data needs the operator real-data authorization; provider data policies stay UNKNOWN"
+    return Panel(Group(table, Text(""), Panel(detail, title="INSPECTOR", border_style="grey50")), title=title, border_style="white" if is_focused else "grey50")
