@@ -3,10 +3,14 @@
 from msu_llm_lab.providers.base import (
     BaseProvider,
     ConfidentialityViolationError,
+    LiveNotAuthorizedError,
     ProviderError,
     ProviderRequest,
     ProviderResponse,
     RateLimitError,
+    UsageUnavailableError,
+    require_complete_usage,
+    require_recordable_cost,
     scrub_secrets,
 )
 from msu_llm_lab.providers.openrouter import OpenRouterAdapter
@@ -19,5 +23,9 @@ __all__ = [
     "ProviderError",
     "ConfidentialityViolationError",
     "RateLimitError",
+    "LiveNotAuthorizedError",
+    "UsageUnavailableError",
+    "require_complete_usage",
+    "require_recordable_cost",
     "scrub_secrets",
 ]
