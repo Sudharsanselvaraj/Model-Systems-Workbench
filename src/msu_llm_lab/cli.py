@@ -4,7 +4,7 @@ import hashlib
 from datetime import datetime
 from decimal import Decimal
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 import typer
 from rich.console import Console
@@ -115,6 +115,157 @@ def handle_welcome_action(choice: int) -> None:
             console.print(f"  Programmes KB SHA-256: [green]{compute_sha256(prog)}[/] (Verified Immutable)")
     elif choice == 9:
         console.print("[dim]Exiting MSU LLM Workbench. Goodbye.[/]\n")
+
+
+def _require_live_confirmation(models: List[str], dataset_name: str):
+    """Fail closed: a live run needs interactive typed confirmation, or the command exits before any request."""
+    from msu_llm_lab.core.live_guard import confirm_live_run
+    from msu_llm_lab.providers.base import LiveNotAuthorizedError
+
+    summary = [
+        f"Live run requested. Models: {', '.join(models)}. Dataset: {dataset_name}.",
+        "Local spend ceilings still apply (preflight and per-case circuit breaker).",
+    ]
+    try:
+        return confirm_live_run(models, summary, echo=lambda line: console.print(line, markup=False, highlight=False))
+    except LiveNotAuthorizedError as e:
+        console.print(f"[bold red]Live run refused:[/bold red] {e}")
+        raise typer.Exit(code=1)
+
+
+@app.command("smoke-test")
+def smoke_test(
+    model: List[str] = typer.Option(["jev-1.14", "gpt-4.1-nano"], "--model", "-m", help="Registry keys to include, or 'all' for the whole roster."),
+    stage: str = typer.Option("smoke", "--stage", help="smoke: the two-model protocol check. pilot: every eligible participant, strict gating."),
+    task: str = typer.Option("both", "--task", "-t", help="INTENT, LEAD or both."),
+    hard_cap: str = typer.Option("0.05", "--hard-cap", help="Hard spend cap in USD for this run (must fit the per-run and pilot ceilings)."),
+    prompt_dir: Path = typer.Option(Path("."), "--prompt-dir", help="Folder holding the two authoritative prompt files."),
+    out_dir: Path = typer.Option(Path("reports/smoke"), "--out-dir", help="Where prediction records are written."),
+    live: bool = typer.Option(False, "--live", help="Send the planned requests. Needs interactive typed approval of the exact plan."),
+) -> None:
+    """Synthetic-only smoke test of the Jev and GPT-4.1 Nano adapters. Prints a plan by default and sends nothing."""
+    from decimal import Decimal, InvalidOperation
+
+    from msu_llm_lab.classification import smoke
+    from msu_llm_lab.classification.records import PredictionStore, Task
+    from msu_llm_lab.core.budget import BudgetService
+    from msu_llm_lab.core.live_guard import confirm_live_run
+    from msu_llm_lab.providers.base import LiveNotAuthorizedError, ProviderError
+
+    try:
+        cap = Decimal(hard_cap)
+    except InvalidOperation:
+        console.print(f"[bold red]Invalid --hard-cap:[/bold red] {hard_cap}")
+        raise typer.Exit(code=1)
+    tasks = [Task.INTENT, Task.LEAD] if task.lower() == "both" else [Task(task.upper())] if task.upper() in ("INTENT", "LEAD") else None
+    if tasks is None:
+        console.print("[bold red]--task must be INTENT, LEAD or both[/bold red]")
+        raise typer.Exit(code=1)
+    try:
+        prompts = smoke.load_prompts(prompt_dir)
+    except FileNotFoundError as e:
+        console.print(f"[bold red]{e}[/bold red]")
+        raise typer.Exit(code=1)
+
+    from msu_llm_lab.models.registry import REGISTRY
+
+    if stage not in ("smoke", "pilot"):
+        console.print("[bold red]--stage must be smoke or pilot[/bold red]")
+        raise typer.Exit(code=1)
+    if "all" in [m.lower() for m in model]:
+        model = list(REGISTRY)
+    budget = BudgetService()
+    plan = smoke.build_plan(model, tasks, prompts, budget, cap, stage=stage)
+    for line in smoke.render_plan(plan):
+        console.print(line, markup=False, highlight=False)
+    if not live:
+        console.print("\nPlan only: nothing was sent. Re-run with --live to request typed approval of this exact plan.", markup=False)
+        raise typer.Exit(code=2 if plan.blocked else 0)
+    if plan.blocked:
+        console.print("[bold red]Live run refused:[/bold red] the plan is blocked.")
+        raise typer.Exit(code=1)
+    try:
+        auth = confirm_live_run(plan.model_ids, ["Approve exactly this plan by typing the phrase below."],
+                                echo=lambda line: console.print(line, markup=False, highlight=False), plan_fingerprint=plan.fingerprint)
+    except LiveNotAuthorizedError as e:
+        console.print(f"[bold red]Live run refused:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    import uuid
+    run_id = f"smoke_{uuid.uuid4().hex[:8]}"
+    store = PredictionStore(Path(out_dir) / f"{run_id}.jsonl")
+    try:
+        smoke.execute_plan(plan, auth, smoke.build_smoke_adapters(model, stage), store, budget, prompts, run_id)
+    except (ProviderError, Exception) as e:  # records already written stay on disk; report honestly
+        console.print(f"[bold red]Smoke test stopped:[/bold red] {type(e).__name__}: {e}")
+    recs = store.load()
+    console.print(f"\nSchema verification only (no accuracy computed). Records: {store.path}", markup=False)
+    for row in smoke.summarize_schema_checks(recs):
+        console.print(str(row), markup=False, highlight=False)
+    raise typer.Exit(code=0 if recs else 1)
+
+
+@models_app.command("roster")
+def models_roster() -> None:
+    """Show every comparison participant with its role, tasks, readiness and exact blockers."""
+    from msu_llm_lab.models.registry import roster_status
+
+    table = Table(title="Comparison roster (10 participants)", show_header=True, header_style="bold magenta")
+    for col in ("Participant", "Role", "Tasks", "Readiness", "Data policy", "Evaluation", "Blockers"):
+        table.add_column(col)
+    for r in roster_status():
+        table.add_row(r["display_name"] or r["key"], ", ".join(r["roles"]), ", ".join(r["tasks"]), r["readiness"], r["data_policy"],
+                      r["evaluation"], ", ".join(r["blockers"]) or "none (synthetic)")
+    console.print(table)
+
+
+@app.command("api-preflight")
+def api_preflight() -> None:
+    """Report whether the API key is available WITHOUT showing it and WITHOUT sending any request."""
+    import os
+    import sys
+
+    from msu_llm_lab.models.registry import roster_status
+
+    raw = os.environ.get("OPENROUTER_API_KEY")
+    present = bool(raw and raw.strip())
+    odd_whitespace = bool(raw) and raw != raw.strip()
+    table = Table(title="API preflight (no request is sent; the key value is never shown)", show_header=True, header_style="bold magenta")
+    table.add_column("Check")
+    table.add_column("Result")
+    table.add_row("OPENROUTER_API_KEY is set and non-empty", "[green]yes[/green]" if present else "[bold red]no[/bold red]")
+    if present:
+        table.add_row("Key has leading/trailing whitespace", "[yellow]yes (fix it)[/yellow]" if odd_whitespace else "no")
+    table.add_row("Interactive terminal (needed for live approval)", "yes" if (sys.stdin.isatty() and sys.stdout.isatty()) else "[yellow]no: live runs would be refused[/yellow]")
+    table.add_row("Source of the key", "environment variable only (no .env loader exists)")
+    table.add_row("Network used by this command", "none")
+    rows = roster_status()
+    table.add_row("Participants READY / SMOKE_READY / BLOCKED",
+                  f"{sum(r['readiness'] == 'READY' for r in rows)} / {sum(r['readiness'] == 'SMOKE_READY' for r in rows)} / {sum(r['readiness'] == 'BLOCKED' for r in rows)}")
+    table.add_row("Student-derived data allowed to any provider", "[bold red]no[/bold red] (no data policy is verified)")
+    console.print(table)
+    if not present:
+        console.print("Set it in your shell before a live run, for example: export OPENROUTER_API_KEY=...  (never paste it into chat or commit it)", markup=False)
+    raise typer.Exit(code=0 if present else 1)
+
+
+@app.command("prepare-classification-data")
+def prepare_classification_data(
+    source: Path = typer.Option(Path("september_to_october.csv"), "--source", help="Historical export (read only)."),
+    out_dir: Path = typer.Option(Path("data/classification_prep/prep-v1"), "--out-dir", help="Local, git-ignored output folder."),
+) -> None:
+    """Clean, redact and prepare the historical export for human review. Local only; prints aggregates, never student text."""
+    from msu_llm_lab.classification import dataprep
+
+    if not source.exists():
+        console.print(f"[bold red]Source not found:[/bold red] {source}")
+        raise typer.Exit(code=1)
+    manifest = dataprep.prepare(source, out_dir)
+    c = manifest["cleaning"]
+    console.print(f"{manifest['parity_status']}  |  prep {manifest['prep_version']}  |  rows accounted: {c['rows_accounted']} of {manifest['source']['rows']}", markup=False)
+    console.print(f"dispositions: {c['dispositions']}  duplicates: {c['duplicates']}  answers missing: {c['answers_missing']}", markup=False)
+    console.print(f"redactions: {c['redaction_token_counts']}  rows with any redaction: {c['rows_with_any_redaction']}", markup=False)
+    console.print(f"sessions: {manifest['session_comparison']['sessions']}  views/splits: {manifest['views_and_splits']}", markup=False)
+    console.print(f"source unchanged: {manifest['source']['unchanged_after_run']}   artifacts in {out_dir}", markup=False)
 
 
 @app.command(name="welcome")
@@ -512,6 +663,7 @@ def run_benchmark(
             console.print(f"[bold red]Error:[/bold red] Invalid split '{split}'. Choose TEST, DEV, or ALL.")
             raise typer.Exit(code=1)
 
+    live_auth = None if dry_run else _require_live_confirmation([model_id], dataset_path.name)
     runner = BenchmarkRunner()
     try:
         report = runner.run(
@@ -519,6 +671,7 @@ def run_benchmark(
             dataset_path=dataset_path,
             split=target_split,
             dry_run=dry_run,
+            live_authorization=live_auth,
         )
     except Exception as e:
         console.print(f"[bold red]Benchmark Failed:[/bold red] {e}")
@@ -730,8 +883,12 @@ def benchmark_rag(
         expand=False,
     ))
 
+    live_auth = None
+    if not dry_run:
+        live_models = [model] + ([compare_with] if compare_with else [])
+        live_auth = _require_live_confirmation(live_models, dataset.name)
     runner = RAGBenchmarkRunner(retriever=retriever, top_k=top_k)
-    report_a = runner.run(model_id=model, dataset_path=dataset, split=split_enum, dry_run=dry_run)
+    report_a = runner.run(model_id=model, dataset_path=dataset, split=split_enum, dry_run=dry_run, live_authorization=live_auth)
 
     # 1. Decoupled Summary Table
     summary_table = Table(title="Decoupled RAG Performance Summary", show_header=True, header_style="bold magenta")
@@ -818,7 +975,7 @@ def benchmark_rag(
             expand=False,
         ))
         runner_b = RAGBenchmarkRunner(retriever=retriever)
-        report_b = runner_b.run(model_id=compare_with, dataset_path=dataset, split=split_enum, dry_run=dry_run)
+        report_b = runner_b.run(model_id=compare_with, dataset_path=dataset, split=split_enum, dry_run=dry_run, live_authorization=live_auth)
 
         comp_table = Table(title=f"Comparative Benchmark: {model} vs {compare_with}", show_header=True, header_style="bold magenta")
         comp_table.add_column("Metric", style="cyan")
@@ -1007,6 +1164,7 @@ def budget_status() -> None:
         total_status_str,
     )
     console.print(table)
+    console.print(f"[dim]Simulated dry-run spend (not counted against any ceiling): ${status.simulated_spend_usd:.6f}[/dim]\n")
 
     rule_table = Table(title="Per-Execution Safety Rules", show_header=True, header_style="bold blue")
     rule_table.add_column("Safety Rule", style="cyan")
@@ -1028,7 +1186,8 @@ def budget_status() -> None:
         tx_table.add_column("Description", style="italic")
 
         for tx in status.recent_transactions:
-            tx_type = "[yellow]ESTIMATE[/yellow]" if tx["is_preflight_estimate"] else "[bold green]ACTUAL[/bold green]"
+            tx_type = ("[yellow]ESTIMATE[/yellow]" if tx["is_preflight_estimate"]
+                       else "[dim]SIMULATED[/dim]" if tx.get("is_simulated") else "[bold green]ACTUAL[/bold green]")
             tx_table.add_row(
                 tx["timestamp"][:19].replace("T", " "),
                 tx["model_id"],
