@@ -63,8 +63,8 @@ def build_top_header() -> Table:
     center_text = Text()
     center_text.append("Project: msu-llm-lab  |  ", style=f"{TEXT_SECONDARY}")
     center_text.append("Mode: ", style=f"{TEXT_SECONDARY}")
-    center_text.append("DRY RUN ", style=f"bold {COLOR_SUCCESS}")
-    center_text.append("(Zero API Spend)", style=f"{TEXT_MUTED}")
+    center_text.append("LOCAL ", style=f"bold {COLOR_SUCCESS}")
+    center_text.append("(no live requests from this screen)", style=f"{TEXT_MUTED}")
 
     now_str = datetime.now().strftime("%a %d %b %Y  %H:%M:%S")
     right_text = Text(now_str, style=f"{TEXT_SECONDARY}")
@@ -289,7 +289,7 @@ def build_inference_status_panel(status: BudgetStatus) -> Panel:
     table.add_column("k", style=f"{TEXT_SECONDARY}", width=13)
     table.add_column("v", justify="right")
 
-    table.add_row("Mode:", Text("DRY RUN", style=f"bold {TEXT_PRIMARY}"))
+    table.add_row("Mode:", Text("LOCAL ONLY", style=f"bold {TEXT_PRIMARY}"))
     table.add_row("API Calls:", Text("0", style=f"{TEXT_PRIMARY}"))
     table.add_row("Total Spend:", Text(f"${status.cumulative_spend_usd:.4f}", style=f"{TEXT_PRIMARY}"))
     table.add_row("Pilot Limit:", Text(f"${status.pilot_ceiling_usd:.2f}", style=f"{TEXT_PRIMARY}"))
@@ -527,7 +527,7 @@ def build_budget_main_panel(
     row5_style = STYLE_ROW_SELECTED if (is_focused and selected_index == 5) else None
 
     s_table.add_row("Provider-Reported Spend", "$0.0000 USD", "No outbound provider synchronization; local tracking only", style=row2_style)
-    s_table.add_row("Live Inference Enabled", f"[bold {COLOR_ERROR}]NO[/]", "Dry-run mode by default; requires explicit live approval", style=row3_style)
+    s_table.add_row("Live Inference Enabled", f"[bold {COLOR_ERROR}]NO[/]", "Live runs only via the CLI with typed approval; requires explicit live approval", style=row3_style)
     s_table.add_row("Max Single Run Spend", f"${status.per_run_ceiling_usd:.4f} USD", "Preflight check rejects run if exceeded", style=row4_style)
     s_table.add_row("Max Single Case Spend", f"${status.per_case_ceiling_usd:.4f} USD", "Per-case circuit breaker halts run", style=row5_style)
     grid.add_row(s_table)
@@ -633,7 +633,7 @@ def build_evaluation_main_panel(
     right_summary.append("Dataset: ", style=f"{TEXT_MUTED}")
     right_summary.append("verified_rag_benchmark.jsonl ", style=f"bold {TEXT_SECONDARY}")
     right_summary.append("• Mode: ", style=f"{TEXT_MUTED}")
-    right_summary.append("DRY-RUN ZERO-SPEND", style=f"bold {COLOR_SUCCESS}")
+    right_summary.append("REAL RUNS ONLY", style=f"bold {COLOR_SUCCESS}")
 
     header_table.add_row(left_summary, right_summary)
     grid.add_row(header_table)
@@ -653,7 +653,7 @@ def build_evaluation_main_panel(
 
     if not runs:
         r_table.add_row(
-            "-", "-", "No recorded runs yet", "0", "-", "-", "-", "$0.0000", "[DRY-RUN]"
+            "-", "-", "No recorded runs yet", "0", "-", "-", "-", "$0.0000", "-"
         )
     else:
         # Windowed scrolling for clean display
@@ -692,8 +692,8 @@ def build_evaluation_main_panel(
             lat = float(run.get("mean_latency_ms", 0.0))
             lat_str = f"{lat:.1f}ms"
             cost_str = f"${float(run.get('total_cost_usd', 0)):.4f}"
-            is_dry = bool(run.get("is_dry_run", 1))
-            mode_badge = f"[{TEXT_MUTED}][DRY-RUN][/]" if is_dry else f"[bold {COLOR_WARNING}][LIVE][/]"
+            is_dry = bool(run.get("is_dry_run", 0))
+            mode_badge = f"[{TEXT_MUTED}][LEGACY][/]" if is_dry else f"[bold {COLOR_WARNING}][LIVE][/]"
 
             row_style = STYLE_ROW_SELECTED if (is_focused and idx == selected_index) else None
             r_table.add_row(
@@ -1001,7 +1001,7 @@ def build_settings_main_panel(is_focused: bool) -> Panel:
     t.append("  App Name:          ", style=f"{TEXT_SECONDARY}")
     t.append("msu-llm-lab\n", style=f"{TEXT_PRIMARY}")
     t.append("  Execution Mode:    ", style=f"{TEXT_SECONDARY}")
-    t.append("DRY-RUN (Locked)\n", style=f"bold {TEXT_PRIMARY}")
+    t.append("REAL REQUESTS ONLY (CLI, typed approval)\n", style=f"bold {TEXT_PRIMARY}")
     t.append("  Database Path:     ", style=f"{TEXT_SECONDARY}")
     t.append("data/workbench.db (SQLite WAL)\n", style=f"{TEXT_PRIMARY}")
     t.append("  Reports Directory: ", style=f"{TEXT_SECONDARY}")
@@ -1070,7 +1070,7 @@ def build_help_main_panel(is_focused: bool = False) -> Panel:
 
 
 # ---------------------------------------------------------------------------
-# Bottom 3 Panels (Matching Mockup)
+# Bottom 3 Panels
 # ---------------------------------------------------------------------------
 
 
@@ -1272,7 +1272,7 @@ def build_footer_bar(status: BudgetStatus) -> Table:
     left.append("Quit", style=f"{TEXT_SECONDARY}")
 
     right = Text()
-    right.append("Dry-run", style=f"bold {COLOR_SUCCESS}")
+    right.append("Local", style=f"bold {COLOR_SUCCESS}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
     right.append("No API calls", style=f"{TEXT_SECONDARY}")
     right.append("  |  ", style=f"{TEXT_MUTED}")
@@ -1325,7 +1325,7 @@ def build_eval_panel(is_focused: bool = False) -> Panel:
         "EVALUATION RUNS",
         "ROADMAP STEP 4",
         [
-            "Dry-run baseline evaluation matrix",
+            "Baseline evaluation matrix (approved live plans)",
             "Batch model inference execution with budget controls",
             "Deterministic latency & token usage recording",
             "Automated scoring against ground-truth benchmarks",
@@ -1358,7 +1358,7 @@ def build_help_panel() -> Panel:
 
 def build_status_bar(status: BudgetStatus, feedback: str = "") -> Panel:
     return Panel(
-        Text(f"STATUS: Dry-run active │ Budget: ${status.remaining_total_usd:.2f} │ {feedback}", style=f"bold {TEXT_PRIMARY}"),
+        Text(f"STATUS: Local only │ Budget: ${status.remaining_total_usd:.2f} │ {feedback}", style=f"bold {TEXT_PRIMARY}"),
         border_style=BORDER_CHARCOAL,
         padding=(0, 1),
     )
