@@ -216,11 +216,11 @@ def to_pdf_redesign(sections: List[Tuple[str, List[Element]]], out_pdf: Path, ba
         c.line(1.7 * cm, A4[1] - 1.2 * cm, A4[0] - 1.7 * cm, A4[1] - 1.2 * cm)
         c.setFont("Helvetica", 6.8)
         c.setFillColor(ink)
-        c.drawString(1.7 * cm, A4[1] - 1.0 * cm, "MSU LLM Inference Workbench  |  Comprehensive Benchmark Evaluation")
+        c.drawString(1.7 * cm, A4[1] - 1.0 * cm, cover.get("header", "MSU LLM Inference Workbench  |  Comprehensive Benchmark Evaluation"))
         c.drawRightString(A4[0] - 1.7 * cm, A4[1] - 1.0 * cm, cover["bench_id"])
         c.line(1.7 * cm, 1.2 * cm, A4[0] - 1.7 * cm, 1.2 * cm)
         c.drawRightString(A4[0] - 1.7 * cm, 0.75 * cm, f"{d.page}")
-        c.drawString(1.7 * cm, 0.75 * cm, "Operational benchmark; ground truth pending; costs estimated")
+        c.drawString(1.7 * cm, 0.75 * cm, cover.get("footer", "Operational benchmark; ground truth pending; costs estimated"))
         c.restoreState()
 
     def draw_cover(c, d):
@@ -230,16 +230,17 @@ def to_pdf_redesign(sections: List[Tuple[str, List[Element]]], out_pdf: Path, ba
         c.saveState()
         c.setFillColor(ink)
         c.setFont("Helvetica-Bold", 34)
-        c.drawString(L, y0, "MSU LLM Inference")
-        c.drawString(L, y0 - 1.3 * cm, "Workbench")
+        t1, t2, sub, sub2 = cover.get("cover_lines", ("MSU LLM Inference", "Workbench", "Comprehensive Benchmark Evaluation", "Operational Reliability, Latency, Cost and Cross-Model Analysis"))
+        c.drawString(L, y0, t1)
+        c.drawString(L, y0 - 1.3 * cm, t2)
         c.setFont("Helvetica", 19)
-        c.drawString(L, y0 - 2.7 * cm, "Comprehensive Benchmark Evaluation")
+        c.drawString(L, y0 - 2.7 * cm, sub)
         c.setFont("Helvetica", 10.5)
-        c.drawString(L, y0 - 3.5 * cm, "Operational Reliability, Latency, Cost and Cross-Model Analysis")
+        c.drawString(L, y0 - 3.5 * cm, sub2)
         c.restoreState()
 
     doc = Doc(str(out_pdf), pagesize=A4, leftMargin=1.7 * cm, rightMargin=1.7 * cm, topMargin=1.6 * cm, bottomMargin=1.6 * cm, invariant=1,
-              title="MSU LLM Inference Workbench — Comprehensive Benchmark Evaluation", author="MSU LLM Workbench (offline report generator)",
+              title=cover.get("pdf_title", "MSU LLM Inference Workbench — Comprehensive Benchmark Evaluation"), author="MSU LLM Workbench (offline report generator)",
               subject=f"Operational benchmark evaluation, {cover['revision']}", keywords=f"{cover['bench_id']}, {cover['revision']}", creator="msu-llm-lab evaluation-report --redesign")
     fr = Frame(doc.leftMargin, doc.bottomMargin, doc.width, doc.height, id="f", leftPadding=0, rightPadding=0, topPadding=0, bottomPadding=0)
     cover_fr = Frame(0, 0, 1, 1, id="cv")
