@@ -318,6 +318,267 @@ def evaluation_report_cmd(
         raise typer.Exit(code=1)
 
 
+labeled_app = typer.Typer(help="Labelled classifier evaluation: offline preparation, plan and scoring (never sends requests).")
+app.add_typer(labeled_app, name="labeled-eval")
+
+
+@labeled_app.command("prepare")
+def labeled_prepare(out_dir: Path = typer.Option(Path("reports/labeled_eval"), "--out")) -> None:
+    """Audit the labelled test suites, freeze splits, separate the answer key and write protocol, blocked-run results table and cost plan. Offline."""
+    try:
+        from msu_llm_lab.labeled_eval import deliver, run
+    except ModuleNotFoundError as e:
+        console.print(f"Missing report dependency ({e.name}). Install them with: uv sync --extra report", markup=False)
+        raise typer.Exit(code=1)
+    r = deliver.deliver(run.Cfg(out=str(out_dir)))
+    console.print(f"Wrote {r['out'].resolve()}; open gates: {', '.join(g['id'] for g in r['gates'] if g['blocking'] and not g['ok']) or 'none'}; eight-participant cohort expected ${r['cohort_totals']['expected_with_observed_retries_usd']:.2f}, guard bound ${r['cohort_totals']['guard_bound_usd']:.2f}; headroom ${r['cohort_verdict']['headroom_usd']:.2f}", markup=False)
+
+
+@labeled_app.command("score")
+def labeled_score(predictions: List[Path] = typer.Argument(..., help="Prediction JSONL files (after inference)."), out_csv: Path = typer.Option(Path("reports/labeled_eval/labeled-eval-v1/classifier_evaluation_results_scored.csv"), "--out")) -> None:
+    """Join stored predictions to the protected answer key and compute metrics. Evaluator only; reads no API key and sends nothing."""
+    from msu_llm_lab.labeled_eval import deliver, run
+
+    res = deliver.score_all(run.Cfg(), predictions, out_csv)
+    console.print(f"Scored {len(res)} model/task/split rows -> {out_csv}", markup=False)
+
+
+@labeled_app.command("record-permission")
+def labeled_record_permission(
+    evidence_type: str = typer.Option(..., "--evidence-type", help="DOCUMENT or OPERATOR_CHAT_ATTESTATION."),
+    verified_by: str = typer.Option(..., "--verified-by", help="Who stands behind this record."),
+    evidence_reference: str = typer.Option(..., "--evidence-reference", help="Document id/ticket/email, or a description of the attestation."),
+    approvers: str = typer.Option(..., "--approvers", help="Names of the approving parties, or 'NOT PROVIDED'."),
+    approved_on: str = typer.Option(..., "--approved-on", help="Date of the approval, or 'NOT PROVIDED'."),
+    source: str = typer.Option(..., "--source", help="Where the approval comes from."),
+) -> None:
+    """Record the data-processing permission for the stored plan exactly as you state it. Nothing is defaulted; an attestation is stored as an attestation."""
+    from msu_llm_lab.core.budget import BudgetService
+    from msu_llm_lab.labeled_eval import execute as X, run
+
+    cfg = run.Cfg()
+    plan = X.build_plan(cfg, BudgetService())
+    try:
+        rec = X.record_processing_permission(cfg, plan, evidence_type=evidence_type, verified_by=verified_by, evidence_reference=evidence_reference, approvers=approvers,
+                                             approved_on=approved_on, source=source, searched=["repository docs and reports", "~/Downloads file names", "earlier benchmark manifests (prep-v2 authorisation only)"])
+    except ValueError as e:
+        console.print(f"[bold red]Not recorded:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(f"Recorded {rec['evidence_type']} for plan {plan['fingerprint']}: {len(rec['models'])} models, {len(rec['routes'])} routes, tasks {rec['tasks']}. Provider policies are NOT verified.", markup=False)
+
+
+@labeled_app.command("master")
+def labeled_master(monthly_cases: Optional[int] = typer.Option(None, "--monthly-cases", help="Optional workload assumption (cases per month) for the projected monthly cost; otherwise NOT_COMPUTED.")) -> None:
+    """Build the Main Intent and Lead Qualifier model-comparison master CSVs, pairwise tests, sensitivity table, reconciliation and summary. Offline, evaluator side only."""
+    try:
+        from msu_llm_lab.labeled_eval import master, run
+    except ModuleNotFoundError as e:
+        console.print(f"Missing report dependency ({e.name}). Install them with: uv sync --extra report", markup=False)
+        raise typer.Exit(code=1)
+    r = master.write_all(run.Cfg(), monthly_cases)
+    for t, p in r["files"].items():
+        console.print(f"{t}: {p} ({len(r['tables'][t])} rows)", markup=False)
+    bad = r["rec"][r["rec"].status == "DISCREPANCY"]
+    console.print(f"reconciliation: {len(r['rec'])} checks, {len(bad)} unexplained discrepancies", markup=False)
+    raise typer.Exit(code=1 if len(bad) else 0)
+
+
+@labeled_app.command("report")
+def labeled_report() -> None:
+    """Write the final results report (PDF + Markdown + figures) from the master tables. Offline."""
+    try:
+        from msu_llm_lab.labeled_eval import report, run
+    except ModuleNotFoundError as e:
+        console.print(f"Missing report dependency ({e.name}). Install them with: uv sync --extra report", markup=False)
+        raise typer.Exit(code=1)
+    r = report.build(run.Cfg())
+    console.print(f"Wrote {r['out']}/classifier_evaluation_report.pdf with {len(r['figures'])} figures", markup=False)
+
+
+jev_app = typer.Typer(help="Pre-registered Jev prompt comparison (V0/V1/V2 on Main Intent). Own plan, approvals and permission record; never runs without every gate.")
+labeled_app.add_typer(jev_app, name="jev-experiment")
+
+
+def _jev_ctx():
+    from msu_llm_lab.core.budget import BudgetService
+    from msu_llm_lab.labeled_eval import jev_experiment as J, run
+
+    cfg = run.Cfg()
+    budget = BudgetService()
+    return J, cfg, budget, J.build_plan(cfg, budget)
+
+
+@jev_app.command("gates")
+def jev_gates(save_plan: bool = typer.Option(False, "--save-plan")) -> None:
+    """Show the experiment plan and every gate. Sends nothing; exit 2 while a blocking gate fails."""
+    J, cfg, budget, plan = _jev_ctx()
+    gates = J.check_gates(cfg, plan, budget)
+    if save_plan:
+        J.save_plan(cfg, plan)
+    for line in J.render_plan(plan, gates):
+        console.print(line, markup=False, highlight=False)
+    raise typer.Exit(code=0 if all(g["ok"] or not g["blocking"] for g in gates) else 2)
+
+
+@jev_app.command("record-approval")
+def jev_record_approval(operator: str = typer.Option(..., "--operator"), statement: str = typer.Option(..., "--statement", help="Your approval, in your words.")) -> None:
+    """Record YOUR approval of this exact plan (bound to its fingerprint). It does not verify the processing permission."""
+    J, cfg, budget, plan = _jev_ctx()
+    try:
+        J.record_operator_approval(cfg, plan, operator=operator, statement=statement)
+    except ValueError as e:
+        console.print(f"[bold red]Not recorded:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(f"Recorded operator approval for plan {plan['fingerprint']}.", markup=False)
+
+
+@jev_app.command("record-permission")
+def jev_record_permission(evidence_type: str = typer.Option(..., "--evidence-type"), verified_by: str = typer.Option(..., "--verified-by"), evidence_reference: str = typer.Option(..., "--evidence-reference"),
+                          approvers: str = typer.Option(..., "--approvers"), approved_on: str = typer.Option(..., "--approved-on"), source: str = typer.Option(..., "--source")) -> None:
+    """Record the processing permission for this plan exactly as you state it (DOCUMENT or OPERATOR_CHAT_ATTESTATION). Nothing is defaulted."""
+    J, cfg, budget, plan = _jev_ctx()
+    try:
+        J.record_permission(cfg, plan, evidence_type=evidence_type, verified_by=verified_by, evidence_reference=evidence_reference, approvers=approvers, approved_on=approved_on, source=source)
+    except ValueError as e:
+        console.print(f"[bold red]Not recorded:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    console.print(f"Recorded {evidence_type} permission for plan {plan['fingerprint']}. Provider policies are NOT verified.", markup=False)
+
+
+@jev_app.command("run")
+def jev_run(operator: str = typer.Option(..., "--operator"), live: bool = typer.Option(False, "--live", help="Send the planned requests. Needs every gate AND two interactive typed approvals.")) -> None:
+    """Execute (or resume) the experiment. Refuses before any typed phrase if a gate fails."""
+    from msu_llm_lab.classification import realdata
+    from msu_llm_lab.classification.smoke import build_smoke_adapters
+    from msu_llm_lab.core.config import load_project_env, settings
+    from msu_llm_lab.core.live_guard import confirm_live_run
+    from msu_llm_lab.labeled_eval import execute as X
+    from msu_llm_lab.providers.base import LiveNotAuthorizedError
+
+    load_project_env()
+    J, cfg, budget, plan = _jev_ctx()
+    stored = J.exp_dir(cfg) / "plan.json"
+    if not stored.exists() or __import__("json").loads(stored.read_text()).get("fingerprint") != plan["fingerprint"]:
+        console.print("[bold red]This exact plan was never stored.[/bold red] Run `labeled-eval jev-experiment gates --save-plan` and review it.")
+        raise typer.Exit(code=1)
+    gates = J.check_gates(cfg, plan, budget)
+    for line in J.render_plan(plan, gates):
+        console.print(line, markup=False, highlight=False)
+    failed = [g for g in gates if g["blocking"] and not g["ok"]]
+    if failed:
+        console.print("[bold red]Live run refused:[/bold red] " + "; ".join(f"{g['id']} {g['item']}" for g in failed))
+        raise typer.Exit(code=1)
+    if not live:
+        console.print("\nPlan only: nothing was sent. Re-run with --live to request the typed approvals.", markup=False)
+        raise typer.Exit(code=0)
+    models = [plan["participant"]["model_id"]]
+    try:
+        live_auth = confirm_live_run(models, ["Approve exactly this experiment plan by typing the phrase below."], echo=lambda line: console.print(line, markup=False, highlight=False), plan_fingerprint=plan["fingerprint"])
+        auth = realdata.confirm_real_data(dataset_version=plan["dataset_version"], session_policy="labeled-test-files", models=models, routes={models[0]: plan["participant"]["route"] or "none"}, tasks=["INTENT"],
+                                          plan_fingerprint=plan["fingerprint"], cost_ceiling_usd=plan["guard_bound_total_usd"], provider_policy_status={models[0]: "UNKNOWN"}, recipients=plan["recipients"], operator=operator,
+                                          echo=lambda line: console.print(line, markup=False, highlight=False))
+    except LiveNotAuthorizedError as e:
+        console.print(f"[bold red]Live run refused:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    adapters = build_smoke_adapters([J.KEY], X.EXECUTION_STAGE)
+    root = settings.data_dir / "labeled_eval" / "labeled-eval-v1" / "jev_prompt_experiment"
+    try:
+        res = X.execute(plan, X.load_cases(cfg), J.load_prompts(cfg), auth, live_auth, adapters, budget, root=root, reports_dir=cfg.out, gate_fn=lambda: J.check_gates(cfg, plan, budget), progress=lambda m: console.print(m, markup=False))
+    except KeyboardInterrupt:
+        console.print("Interrupted. Progress is checkpointed; re-run the same command to resume.", markup=False)
+        raise typer.Exit(code=130)
+    except Exception as e:
+        console.print(f"[bold red]Experiment stopped:[/bold red] {type(e).__name__}: {e}")
+        raise typer.Exit(code=1)
+    console.print(f"\nunits {res.units_done} of {res.units_total}   guard cost ${res.spent_guard_usd}   halted: {res.halted or 'no'}", markup=False)
+    for m, why in res.quarantined.items():
+        console.print(f"QUARANTINED {m}: {why}", markup=False)
+    raise typer.Exit(code=0 if (res.units_done == res.units_total and not res.quarantined) else 3)
+
+
+@jev_app.command("score")
+def jev_score() -> None:
+    """Score the experiment against the protected key and apply the pre-registered selection rule. Offline."""
+    from msu_llm_lab.labeled_eval import jev_experiment_score as S, run
+
+    r = S.score(run.Cfg())
+    console.print(f"Scored {len(r['results'])} variant/half rows; selected on dev: {r['selected']}; V0 repeat agreement: {r['agreement']}", markup=False)
+
+
+@labeled_app.command("gates")
+def labeled_gates(save_plan: bool = typer.Option(False, "--save-plan", help="Also store the plan (case ids and bounds only).")) -> None:
+    """Show the plan and every gate that must pass before any request. Sends nothing."""
+    from msu_llm_lab.core.budget import BudgetService
+    from msu_llm_lab.labeled_eval import execute as X, run
+
+    cfg = run.Cfg()
+    budget = BudgetService()
+    plan = X.build_plan(cfg, budget)
+    gates = X.check_gates(cfg, plan, budget)
+    if save_plan:
+        X.save_plan(cfg, plan)
+    for line in X.render_plan(plan, gates):
+        console.print(line, markup=False, highlight=False)
+    raise typer.Exit(code=0 if all(g["ok"] or not g["blocking"] for g in gates) else 2)
+
+
+@labeled_app.command("run")
+def labeled_run(operator: str = typer.Option(..., "--operator", help="Your name, recorded in the authorisation."),
+                live: bool = typer.Option(False, "--live", help="Send the planned requests. Needs every gate AND two interactive typed approvals.")) -> None:
+    """Execute (or resume) the labelled evaluation. Refuses before any typed phrase if a gate fails."""
+    from msu_llm_lab.classification import realdata
+    from msu_llm_lab.classification.smoke import build_smoke_adapters
+    from msu_llm_lab.core.budget import BudgetService
+    from msu_llm_lab.core.config import load_project_env, settings
+    from msu_llm_lab.core.live_guard import confirm_live_run
+    from msu_llm_lab.labeled_eval import execute as X, run
+    from msu_llm_lab.providers.base import LiveNotAuthorizedError
+
+    load_project_env()
+    cfg = run.Cfg()
+    budget = BudgetService()
+    plan = X.build_plan(cfg, budget)
+    stored = cfg.out / run.VERSION / "plan.json"
+    if not stored.exists() or __import__("json").loads(stored.read_text()).get("fingerprint") != plan["fingerprint"]:
+        console.print("[bold red]This exact plan was never stored.[/bold red] Run `labeled-eval gates --save-plan` and review it.")
+        raise typer.Exit(code=1)
+    gates = X.check_gates(cfg, plan, budget)
+    for line in X.render_plan(plan, gates):
+        console.print(line, markup=False, highlight=False)
+    failed = [g for g in gates if g["blocking"] and not g["ok"]]
+    if failed:
+        console.print("[bold red]Live run refused:[/bold red] " + "; ".join(f"{g['id']} {g['item']}" for g in failed))
+        raise typer.Exit(code=1)
+    if not live:
+        console.print("\nPlan only: nothing was sent. Re-run with --live to request the typed approvals.", markup=False)
+        raise typer.Exit(code=0)
+    models = [p["model_id"] for p in plan["participants"]]
+    try:
+        live_auth = confirm_live_run(models, ["Approve exactly this plan by typing the phrase below."], echo=lambda line: console.print(line, markup=False, highlight=False), plan_fingerprint=plan["fingerprint"])
+        auth = realdata.confirm_real_data(dataset_version=run.VERSION, session_policy="labeled-test-files", models=models, routes={p["model_id"]: (p["route"] or "none") for p in plan["participants"]},
+                                          tasks=["INTENT", "LEAD"], plan_fingerprint=plan["fingerprint"], cost_ceiling_usd=plan["guard_bound_total_usd"],
+                                          provider_policy_status={m: "UNKNOWN" for m in models}, recipients=plan["recipients"], operator=operator,
+                                          echo=lambda line: console.print(line, markup=False, highlight=False))
+    except LiveNotAuthorizedError as e:
+        console.print(f"[bold red]Live run refused:[/bold red] {e}")
+        raise typer.Exit(code=1)
+    adapters = build_smoke_adapters([p["key"] for p in plan["participants"]], X.EXECUTION_STAGE)
+    root = settings.data_dir / "labeled_eval" / run.VERSION
+    try:
+        res = X.execute(plan, X.load_cases(cfg), X.load_prompts(), auth, live_auth, adapters, budget, root=root, reports_dir=cfg.out,
+                        gate_fn=lambda: X.check_gates(cfg, plan, budget), progress=lambda m: console.print(m, markup=False))
+    except KeyboardInterrupt:
+        console.print("Interrupted. Progress is checkpointed; re-run the same command to resume.", markup=False)
+        raise typer.Exit(code=130)
+    except Exception as e:
+        console.print(f"[bold red]Evaluation stopped:[/bold red] {type(e).__name__}: {e}")
+        raise typer.Exit(code=1)
+    console.print(f"\nunits {res.units_done} of {res.units_total}   guard cost ${res.spent_guard_usd}   halted: {res.halted or 'no'}", markup=False)
+    for m, why in res.quarantined.items():
+        console.print(f"QUARANTINED {m}: {why}", markup=False)
+    raise typer.Exit(code=0 if (res.units_done == res.units_total and not res.quarantined) else 3)
+
+
 real_app = typer.Typer(help="Authorized real-data benchmark: plan, run (typed approvals), status, report.")
 app.add_typer(real_app, name="real-benchmark")
 
