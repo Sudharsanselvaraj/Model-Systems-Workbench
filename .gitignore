@@ -77,3 +77,6 @@ Icon
 september_to_october.csv
 main_intent_classifier.md
 lead_qualification_prompt.md
+
+# Labelled evaluation datasets (expected labels; origin to be confirmed by the data owner)
+Intent:lead dataset/
